@@ -1,11 +1,174 @@
 import io
 import pandas as pd
 import streamlit as st
+import os
 
 st.set_page_config(page_title="Merge Excel файлов", layout="wide")
-st.title("Объединение Excel файлов по ключевому полю")
-st.caption("Загрузите 2 или 3 Excel файла, выберите ключ для объединения. Результат содержит только строки, найденные во ВСЕХ файлах.")
+def sync_catalog(df_update, catalog_file, key_cat, key_update):
+    import os
+    import pandas as pd
 
+    # Загружаем каталог
+    if os.path.exists(catalog_file):
+        df_cat = pd.read_csv(catalog_file)
+    else:
+        st.error("Каталог не найден!")
+        return
+
+    # Добавляем новые столбцы, если есть
+    for col in df_update.columns:
+        if col not in df_cat.columns:
+            df_cat[col] = None
+
+    # Обновление данных по ключу
+    updates = 0
+    for _, new_row in df_update.iterrows():
+        key_val = new_row.get(key_update)
+        if key_val is None:
+            continue
+        match_idx = df_cat[df_cat[key_cat] == key_val].index
+        if len(match_idx):
+            idx = match_idx[0]
+            for col in df_update.columns:
+                if pd.notnull(new_row[col]) and col != key_update:
+                    df_cat.at[idx, col] = new_row[col]
+            updates += 1
+        else:
+            # Добавить новую строку с переносом данных из df_update
+            empty_row = {col: None for col in df_cat.columns}
+            for col in df_update.columns:
+                empty_row[col] = new_row[col]
+            df_cat = pd.concat([df_cat, pd.DataFrame([empty_row])], ignore_index=True)
+            updates += 1
+
+    df_cat.to_csv(catalog_file, index=False)
+    return updates
+
+def clean_catalog(df):
+    seen = {}
+    for col in df.columns:
+        val = tuple(df[col].fillna("").astype(str))
+        if val in seen:
+            df = df.drop(columns=[col])
+        else:
+            seen[val] = col
+    df = df.dropna(axis=1, how='all')
+    df = df.drop_duplicates()
+    text_cols = df.select_dtypes(include=['object']).columns
+    for col in text_cols:
+        df[col] = df[col].astype(str).str.strip().str.replace('\s+', ' ', regex=True)
+    return df
+
+def show_catalog_tab():
+    import os
+    import pandas as pd
+    st.title("Каталог")
+    catalog_file = "catalog.csv"
+    if os.path.exists(catalog_file):
+        df_cat = pd.read_csv(catalog_file)
+    else:
+        st.error("Файл каталога не найден!")
+        return
+    st.write("Текущий каталог:")
+    st.dataframe(df_cat, use_container_width=True)
+
+    # Загрузка и обновление каталога по ключу
+    st.markdown("**Обновить/добавить товары из файла по выбранному ключу**")
+    uploaded_file = st.file_uploader("Загрузить файл для обновления (CSV/XLSX)", type=["csv", "xlsx"])
+    if uploaded_file:
+        if uploaded_file.name.endswith('.csv'):
+            df_update = pd.read_csv(uploaded_file)
+        else:
+            df_update = pd.read_excel(uploaded_file)
+        st.write(f"Столбцы обновляющего файла: {list(df_update.columns)}")
+        st.write(f"Столбцы каталога: {list(df_cat.columns)}")
+        if st.checkbox("Показать данные для обновления"):
+            st.dataframe(df_update)
+        # Выбор ключевого поля для обновления
+        key_cat = st.selectbox("Выберите ключевое поле в каталоге", list(df_cat.columns))
+        key_update = st.selectbox("Выберите ключевое поле в файле обновления", list(df_update.columns))
+        if st.button("Обновить каталог по этим ключам", use_container_width=True):
+            count = sync_catalog(df_update, catalog_file, key_cat, key_update)
+            st.success(f"Каталог обновлён ({count} строк изменено/добавлено).")
+
+    # Кнопка очистки
+    st.markdown("**Очистить и нормализовать базу**")
+    if st.button("Провести автоматическую очистку каталога", use_container_width=True):
+        with st.spinner("Идёт очистка..."):
+            df_clean = clean_catalog(df_cat)
+            df_clean.to_csv(catalog_file, index=False)
+        st.success("✅ Каталог очищен и нормализован!")
+        st.experimental_rerun()
+
+    # Динамическая форма для ручного добавления/редактирования — на основе структуры каталога
+    with st.form("add_item"):
+        st.write("Добавить или обновить товар вручную")
+        values = {}
+        for col in df_cat.columns:
+            values[col] = st.text_input(col)
+        submitted = st.form_submit_button("Добавить / Обновить")
+        if submitted:
+            key_col = st.selectbox("Выберите ключевое поле для ручного добавления", list(df_cat.columns))
+            key_val = values[key_col]
+            idx = df_cat[df_cat[key_col] == key_val].index
+            if len(idx):
+                # обновление
+                for col in df_cat.columns:
+                    df_cat.at[idx[0], col] = values[col]
+                st.success("Запись обновлена!")
+            else:
+                # добавление
+                df_cat = pd.concat([df_cat, pd.DataFrame([values])], ignore_index=True)
+                st.success("Запись добавлена!")
+            df_cat.to_csv(catalog_file, index=False)
+            st.experimental_rerun()
+
+    st.download_button("Скачать каталог CSV", df_cat.to_csv(index=False).encode(), "catalog.csv")
+
+
+
+
+tab1, tab2 = st.tabs(["Объединение файлов", "Каталог"])
+with tab2:
+    show_catalog_tab()
+
+           
+with tab1:
+        st.title("Объединение Excel файлов по ключевому полю")
+        st.caption("Загрузите 2 или 3 Excel файла, выберите ключ для объединения. Результат содержит только строки, найденные во ВСЕХ файлах.")
+
+
+def sync_catalog(df, catalog_file="catalog.csv"):
+    # df — это DataFrame исходных (новых) данных
+    # catalog_file — путь к файлу каталога
+    if os.path.exists(catalog_file):
+        df_cat = pd.read_csv(catalog_file)
+    else:
+        # Начальный каталог, создаём новый
+        df_cat = pd.DataFrame(columns=["Код ТН ВЭД", "Наименование", "Описание", "Ед. изм.", "Страна"])
+    # Добавляем новые столбцы, если появились
+    for col in df.columns:
+        if col not in df_cat.columns:
+            df_cat[col] = None
+    # Проходим по исходным данным
+    for _, row in df.iterrows():
+        code = row["Код ТН ВЭД"]
+        # Если товара нет — добавить
+        if code not in df_cat["Код ТН ВЭД"].values:
+            new_row = {col: row.get(col, None) for col in df_cat.columns}
+            df_cat = df_cat.append(new_row, ignore_index=True)
+        else:
+            # Если есть — обновить новые значения (только не пустые)
+            idx = df_cat[df_cat["Код ТН ВЭД"] == code].index[0]
+            for col in df.columns:
+                if pd.notnull(row[col]):
+                    df_cat.at[idx, col] = row[col]
+    # Сохраняем
+    df_cat.to_csv(catalog_file, index=False)
+
+# В конце обработки (на вкладке объединения)
+# sync_catalog(df)   # df — твоя итоговая, обработанная таблица
+    
 # ---------- Sidebar ----------
 with st.sidebar:
     st.header("Параметры чтения")
@@ -167,6 +330,36 @@ else:
             result = result.dropna(subset=non_key_cols, how='all')
         
         return result
+def sync_catalog(df, catalog_file="catalog.csv"):
+    # df — это DataFrame исходных (новых) данных
+    # catalog_file — путь к файлу каталога
+    if os.path.exists(catalog_file):
+        df_cat = pd.read_csv(catalog_file)
+    else:
+        # Начальный каталог, создаём новый
+        df_cat = pd.DataFrame(columns=["Код ТН ВЭД", "Наименование", "Описание", "Ед. изм.", "Страна"])
+    # Добавляем новые столбцы, если появились
+    for col in df.columns:
+        if col not in df_cat.columns:
+            df_cat[col] = None
+    # Проходим по исходным данным
+    for _, row in df.iterrows():
+        code = row["Код ТН ВЭД"]
+        # Если товара нет — добавить
+        if code not in df_cat["Код ТН ВЭД"].values:
+            new_row = {col: row.get(col, None) for col in df_cat.columns}
+            df_cat = df_cat.append(new_row, ignore_index=True)
+        else:
+            # Если есть — обновить новые значения (только не пустые)
+            idx = df_cat[df_cat["Код ТН ВЭД"] == code].index[0]
+            for col in df.columns:
+                if pd.notnull(row[col]):
+                    df_cat.at[idx, col] = row[col]
+    # Сохраняем
+    df_cat.to_csv(catalog_file, index=False)
+
+# В конце обработки (на вкладке объединения)
+# sync_catalog(df)   # df — твоя итоговая, обработанная таблица
 
     # ---------- Шаг 4: Объединение и выгрузка ----------
     st.subheader("Шаг 4: Создание результата")
@@ -228,3 +421,21 @@ else:
         except Exception as e:
             st.error(f"❌ Ошибка при объединении: {e}")
             st.exception(e)
+    st.success(f"✅ Объединено {len(result)} строк (пустые строки удалены)")
+
+# Кнопка синхронизации каталога
+if st.button("🔄 Синхронизировать каталог с новыми данными", use_container_width=True):
+    with st.spinner("Обновляем каталог..."):
+        sync_catalog(result)
+    st.success("✅ Каталог успешно обновлён! Проверьте вкладку 'Каталог'.")
+
+
+
+
+
+
+
+
+
+
+            
