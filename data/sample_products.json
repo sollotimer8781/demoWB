@@ -1,0 +1,182 @@
+[
+  {
+    "nm_id": 1000001,
+    "title": "Mock Running Shoes Sprint 1",
+    "brand": "MockSport",
+    "price": 3990.0,
+    "stock": 42,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Running+Shoes+1",
+      "https://via.placeholder.com/300x300.png?text=Running+Shoes+1B"
+    ],
+    "extra": {
+      "category": "Footwear",
+      "tags": ["running", "sport"],
+      "rating": 4.6,
+      "dimensions": {
+        "length_cm": 30,
+        "width_cm": 12,
+        "height_cm": 10
+      }
+    }
+  },
+  {
+    "nm_id": 1000002,
+    "title": "Everyday Hoodie Classic",
+    "brand": "UrbanLayer",
+    "price": 2490.0,
+    "stock": 55,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Hoodie+Classic",
+      "https://via.placeholder.com/300x300.png?text=Hoodie+Classic+Back"
+    ],
+    "extra": {
+      "category": "Apparel",
+      "tags": ["hoodie", "casual", "unisex"],
+      "rating": 4.2,
+      "materials": {
+        "cotton": "80%",
+        "polyester": "20%"
+      }
+    }
+  },
+  {
+    "nm_id": 1000003,
+    "title": "Smart Fitness Tracker Lite",
+    "brand": "FitPulse",
+    "price": 5490.0,
+    "stock": 23,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Fitness+Tracker",
+      "https://via.placeholder.com/300x300.png?text=Fitness+Tracker+Box"
+    ],
+    "extra": {
+      "category": "Electronics",
+      "tags": ["fitness", "wearable"],
+      "rating": 4.8,
+      "battery_life_hours": 120,
+      "supports": ["heart_rate", "sleep_tracking", "notifications"]
+    }
+  },
+  {
+    "nm_id": 1000004,
+    "title": "Ceramic Coffee Mug 420ml",
+    "brand": "HomeBrew",
+    "price": 790.0,
+    "stock": 200,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Coffee+Mug",
+      "https://via.placeholder.com/300x300.png?text=Coffee+Mug+Set"
+    ],
+    "extra": {
+      "category": "Kitchen",
+      "tags": ["mug", "ceramic"],
+      "rating": 4.5,
+      "dishwasher_safe": true
+    }
+  },
+  {
+    "nm_id": 1000005,
+    "title": "Wireless Earbuds Noise Canceling",
+    "brand": "SoundNest",
+    "price": 6990.0,
+    "stock": 35,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Wireless+Earbuds",
+      "https://via.placeholder.com/300x300.png?text=Wireless+Earbuds+Case"
+    ],
+    "extra": {
+      "category": "Electronics",
+      "tags": ["audio", "bluetooth"],
+      "rating": 4.7,
+      "battery_life_hours": 36,
+      "water_resistant": "IPX4"
+    }
+  },
+  {
+    "nm_id": 1000006,
+    "title": "Organic Green Tea Collection",
+    "brand": "Leafful",
+    "price": 1290.0,
+    "stock": 120,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Green+Tea",
+      "https://via.placeholder.com/300x300.png?text=Green+Tea+Pack"
+    ],
+    "extra": {
+      "category": "Grocery",
+      "tags": ["tea", "organic"],
+      "rating": 4.4,
+      "variants": ["Sencha", "Matcha", "Genmaicha"]
+    }
+  },
+  {
+    "nm_id": 1000007,
+    "title": "Minimalist Desk Lamp",
+    "brand": "BrightCraft",
+    "price": 3590.0,
+    "stock": 48,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Desk+Lamp",
+      "https://via.placeholder.com/300x300.png?text=Desk+Lamp+Side"
+    ],
+    "extra": {
+      "category": "Home Decor",
+      "tags": ["lighting", "minimalist"],
+      "rating": 4.3,
+      "adjustable_levels": 5
+    }
+  },
+  {
+    "nm_id": 1000008,
+    "title": "Trail Backpack 28L",
+    "brand": "PeakQuest",
+    "price": 4490.0,
+    "stock": 60,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Trail+Backpack",
+      "https://via.placeholder.com/300x300.png?text=Trail+Backpack+Open"
+    ],
+    "extra": {
+      "category": "Outdoor",
+      "tags": ["backpack", "hiking"],
+      "rating": 4.5,
+      "capacity_l": 28,
+      "weather_resistant": true
+    }
+  },
+  {
+    "nm_id": 1000009,
+    "title": "Baby Cotton Blanket",
+    "brand": null,
+    "price": 1890.0,
+    "stock": 75,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Baby+Blanket",
+      "https://via.placeholder.com/300x300.png?text=Baby+Blanket+Detail"
+    ],
+    "extra": {
+      "category": "Baby",
+      "tags": ["blanket", "cotton"],
+      "rating": 4.9,
+      "wash_temperature_c": 40
+    }
+  },
+  {
+    "nm_id": 1000010,
+    "title": "Artisanal Dark Chocolate 70%",
+    "brand": "CocoaLab",
+    "price": 590.0,
+    "stock": 90,
+    "image_urls": [
+      "https://via.placeholder.com/300x300.png?text=Dark+Chocolate",
+      "https://via.placeholder.com/300x300.png?text=Dark+Chocolate+Pieces"
+    ],
+    "extra": {
+      "category": "Grocery",
+      "tags": ["chocolate", "dessert"],
+      "rating": 4.1,
+      "cocoa_percentage": 70
+    }
+  }
+]
