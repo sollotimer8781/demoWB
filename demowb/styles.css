@@ -1,0 +1,464 @@
+:root {
+  color-scheme: dark;
+  --demowb-bg: #0f111e;
+  --demowb-surface: #161a2b;
+  --demowb-surface-alt: #1d2335;
+  --demowb-surface-hover: #242b42;
+  --demowb-border: #2f3654;
+  --demowb-border-strong: #3e4767;
+  --demowb-primary: #6c5dd3;
+  --demowb-primary-hover: #8071f0;
+  --demowb-primary-muted: rgba(108, 93, 211, 0.18);
+  --demowb-text: #f4f5ff;
+  --demowb-text-muted: #c2c7e7;
+  --demowb-success: #3fd08d;
+  --demowb-warning: #ffb347;
+  --demowb-danger: #ff6b81;
+}
+
+html,
+body,
+.stApp {
+  background-color: var(--demowb-bg);
+  color: var(--demowb-text);
+}
+
+body,
+.stApp,
+.stMarkdown,
+.stText,
+.stDataFrame,
+.stDataFrame div {
+  font-family: "Inter", "Segoe UI", sans-serif;
+}
+
+section[data-testid="stSidebar"] {
+  background-color: var(--demowb-surface);
+  border-right: 1px solid var(--demowb-border);
+}
+
+section[data-testid="stSidebar"] > div:first-child {
+  padding-top: 1.25rem;
+}
+
+section[data-testid="stSidebar"] * {
+  color: var(--demowb-text);
+}
+
+section[data-testid="stSidebar"] .stButton > button {
+  width: 100%;
+}
+
+.block-container {
+  padding-top: 1.5rem;
+  padding-bottom: 4rem;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+p,
+label,
+span,
+small,
+.stMarkdown,
+.stMarkdown p {
+  color: var(--demowb-text);
+}
+
+.stCaption,
+.stMarkdown small,
+.stMarkdown span {
+  color: var(--demowb-text-muted);
+}
+
+a,
+a:visited {
+  color: var(--demowb-primary);
+}
+
+a:hover {
+  color: var(--demowb-primary-hover);
+}
+
+.stDivider > div {
+  border-color: var(--demowb-border);
+}
+
+.stAlert {
+  background-color: var(--demowb-surface-alt);
+  border: 1px solid var(--demowb-border);
+  color: var(--demowb-text);
+}
+
+.stAlert div[data-testid="stMarkdownContainer"] * {
+  color: var(--demowb-text);
+}
+
+.stTabs [data-baseweb="tab-list"] {
+  gap: 0.25rem;
+}
+
+.stTabs [data-baseweb="tab"] {
+  background-color: var(--demowb-surface);
+  color: var(--demowb-text-muted);
+  border: 1px solid transparent;
+  border-radius: 0.6rem 0.6rem 0 0;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+  background-color: var(--demowb-surface-hover);
+  color: var(--demowb-text);
+}
+
+.stTabs [aria-selected="true"] {
+  background-color: var(--demowb-surface-alt);
+  color: var(--demowb-text);
+  border-color: var(--demowb-border);
+}
+
+.stExpander {
+  background-color: var(--demowb-surface);
+  border: 1px solid var(--demowb-border);
+  border-radius: 0.9rem;
+}
+
+.stExpander > div {
+  background-color: transparent;
+}
+
+.stExpander .stExpanderHeader {
+  color: var(--demowb-text);
+}
+
+.stCheckbox > label,
+.stRadio > label {
+  color: var(--demowb-text);
+}
+
+.stCheckbox > label:hover,
+.stRadio > label:hover {
+  color: var(--demowb-primary-hover);
+}
+
+.stNumberInput label,
+.stSlider label,
+.stMultiSelect label,
+.stSelectbox label,
+.stTextInput label,
+.stTextArea label,
+.stDateInput label,
+.stTimeInput label,
+.stColorPicker label {
+  color: var(--demowb-text);
+  font-weight: 500;
+}
+
+input,
+select,
+textarea,
+.stTextInput input,
+.stTextArea textarea,
+.stDateInput input,
+.stTimeInput input,
+.stNumberInput input,
+.stSelectbox > div > div,
+.stMultiSelect > div > div,
+.stSlider > div,
+.stColorPicker > div > div {
+  background-color: var(--demowb-surface);
+  color: var(--demowb-text);
+  border: 1px solid var(--demowb-border);
+  border-radius: 0.6rem;
+}
+
+.stTextInput input:focus,
+.stTextArea textarea:focus,
+.stDateInput input:focus,
+.stTimeInput input:focus,
+.stNumberInput input:focus,
+.stSelectbox > div > div:hover,
+.stMultiSelect > div > div:hover {
+  border-color: var(--demowb-primary);
+  box-shadow: 0 0 0 1px var(--demowb-primary);
+}
+
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+  color: var(--demowb-text-muted);
+}
+
+.stCheckbox div[data-testid="stMarkdownContainer"] * {
+  color: var(--demowb-text);
+}
+
+.stButton > button,
+.stDownloadButton > button,
+button[kind="primary"],
+button[data-baseweb="button"] {
+  background: linear-gradient(135deg, var(--demowb-primary), var(--demowb-primary-hover));
+  color: var(--demowb-text);
+  border: 1px solid transparent;
+  border-radius: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 12px 20px -12px rgba(108, 93, 211, 0.8);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+button[kind="primary"]:hover,
+button[data-baseweb="button"]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 15px 30px -15px rgba(108, 93, 211, 0.8);
+}
+
+.stButton > button:active,
+.stDownloadButton > button:active,
+button[kind="primary"]:active,
+button[data-baseweb="button"]:active {
+  transform: translateY(0);
+  box-shadow: 0 4px 16px -10px rgba(108, 93, 211, 0.8) inset;
+}
+
+.stButton > button:disabled,
+.stDownloadButton > button:disabled {
+  background: var(--demowb-primary-muted);
+  color: var(--demowb-text-muted);
+  box-shadow: none;
+}
+
+a[data-testid="stPageLink"] {
+  background-color: var(--demowb-surface);
+  color: var(--demowb-text-muted);
+  border-radius: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid transparent;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+a[data-testid="stPageLink"]:hover {
+  background-color: var(--demowb-surface-hover);
+  color: var(--demowb-text);
+  border-color: var(--demowb-border);
+}
+
+a[data-testid="stPageLink"][aria-disabled="true"] {
+  background: linear-gradient(135deg, var(--demowb-primary), var(--demowb-primary-hover));
+  color: var(--demowb-text);
+  border-color: transparent;
+  box-shadow: 0 12px 20px -12px rgba(108, 93, 211, 0.8);
+}
+
+a[data-testid="stPageLink"][aria-disabled="true"] span {
+  color: var(--demowb-text);
+}
+
+.demowb-app-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1rem 1.3rem;
+  border-radius: 0.9rem;
+  background: linear-gradient(120deg, rgba(33, 38, 63, 0.95), rgba(21, 24, 43, 0.95));
+  border: 1px solid var(--demowb-border);
+  box-shadow: 0 24px 48px -32px rgba(15, 17, 30, 0.9);
+}
+
+.demowb-app-header__title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--demowb-text);
+}
+
+.demowb-app-header__subtitle {
+  font-size: 0.9rem;
+  color: var(--demowb-primary-hover);
+}
+
+.stMetric {
+  background: var(--demowb-surface);
+  border-radius: 0.9rem;
+  padding: 1rem;
+  border: 1px solid var(--demowb-border);
+}
+
+div[data-testid="stMetricValue"],
+.stMetric label,
+.stMetric span {
+  color: var(--demowb-text);
+}
+
+div[data-testid="stMetricLabel"] {
+  color: var(--demowb-text-muted);
+}
+
+.stDataFrame,
+div[data-testid="stDataFrame"],
+div[data-testid="stDataEditorGrid"] {
+  background-color: var(--demowb-surface);
+  border-radius: 0.9rem;
+  border: 1px solid var(--demowb-border);
+  padding: 0.5rem;
+}
+
+div[data-testid="stDataFrame"] table,
+div[data-testid="stDataFrame"] tbody tr,
+div[data-testid="stDataEditorGrid"] table {
+  color: var(--demowb-text);
+  background-color: transparent;
+}
+
+div[data-testid="stDataFrame"] thead th,
+div[data-testid="stDataEditorGrid"] thead th {
+  background-color: var(--demowb-surface-alt);
+  color: var(--demowb-text);
+  border-bottom: 1px solid var(--demowb-border-strong);
+}
+
+div[data-testid="stDataFrame"] tbody td,
+div[data-testid="stDataEditorGrid"] tbody td {
+  border-bottom: 1px solid var(--demowb-border);
+}
+
+.stDataFrame tr:nth-child(even),
+div[data-testid="stDataFrame"] tbody tr:nth-child(even) {
+  background-color: rgba(36, 43, 66, 0.35);
+}
+
+div[data-testid="stDataFrame"] input,
+div[data-testid="stDataEditorGrid"] input,
+div[data-testid="stDataEditorGrid"] textarea {
+  background-color: var(--demowb-surface-alt);
+  color: var(--demowb-text);
+  border: 1px solid var(--demowb-border);
+}
+
+div[data-testid="stDataEditorGrid"] input:focus,
+div[data-testid="stDataEditorGrid"] textarea:focus {
+  border-color: var(--demowb-primary);
+  box-shadow: 0 0 0 1px var(--demowb-primary);
+}
+
+.stDataFrame .st-ag-theme-streamlit,
+div[data-testid="stDataFrame"] .st-ag-theme-streamlit {
+  --ag-background-color: var(--demowb-surface);
+  --ag-odd-row-background-color: rgba(36, 43, 66, 0.3);
+  --ag-header-background-color: var(--demowb-surface-alt);
+  --ag-border-color: var(--demowb-border);
+  --ag-row-hover-color: rgba(128, 113, 240, 0.14);
+  --ag-font-color: var(--demowb-text);
+}
+
+code,
+pre,
+.stMarkdown code {
+  background-color: rgba(36, 43, 66, 0.65);
+  color: var(--demowb-text);
+  border-radius: 0.5rem;
+  border: 1px solid var(--demowb-border);
+}
+
+pre {
+  padding: 0.75rem 1rem;
+}
+
+.st-bd {
+  color: var(--demowb-text-muted);
+}
+
+/* Scrollbars */
+body::-webkit-scrollbar,
+section[data-testid="stSidebar"]::-webkit-scrollbar,
+.stDataFrame::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+body::-webkit-scrollbar-thumb,
+section[data-testid="stSidebar"]::-webkit-scrollbar-thumb,
+.stDataFrame::-webkit-scrollbar-thumb {
+  background: var(--demowb-border-strong);
+  border-radius: 10px;
+}
+
+body::-webkit-scrollbar-thumb:hover,
+section[data-testid="stSidebar"]::-webkit-scrollbar-thumb:hover {
+  background: var(--demowb-primary);
+}
+
+/* File uploader */
+.stFileUploader {
+  background-color: var(--demowb-surface);
+  border: 1px dashed var(--demowb-border);
+  border-radius: 0.9rem;
+  padding: 1rem;
+}
+
+.stFileUploader label {
+  color: var(--demowb-text-muted);
+}
+
+/* Data editor toolbar */
+div[data-testid="stDataFrame"] [data-baseweb="button-group"] button {
+  background-color: var(--demowb-surface-alt);
+  color: var(--demowb-text-muted);
+  border: 1px solid var(--demowb-border);
+}
+
+div[data-testid="stDataFrame"] [data-baseweb="button-group"] button:hover {
+  background-color: var(--demowb-surface-hover);
+  color: var(--demowb-text);
+}
+
+/* Success/info states */
+.stSuccess {
+  border-left: 4px solid var(--demowb-success);
+}
+
+.stInfo {
+  border-left: 4px solid var(--demowb-primary);
+}
+
+.stWarning {
+  border-left: 4px solid var(--demowb-warning);
+}
+
+.stError {
+  border-left: 4px solid var(--demowb-danger);
+}
+
+/* Cards */
+.demowb-card {
+  background: var(--demowb-surface);
+  border: 1px solid var(--demowb-border);
+  border-radius: 1rem;
+  padding: 1.25rem;
+  box-shadow: 0 18px 40px -28px rgba(0, 0, 0, 0.6);
+}
+
+.demowb-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+}
+
+.demowb-card__icon {
+  font-size: 1.25rem;
+}
+
+.demowb-card__title {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--demowb-text);
+}
+
+.demowb-card__supporting {
+  color: var(--demowb-text-muted);
+  font-size: 0.9rem;
+  margin-top: 0.1rem;
+}
