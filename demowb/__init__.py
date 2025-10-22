@@ -1,5 +1,5 @@
 """demoWB package utilities."""
 
-from . import db
+from . import analytics, db, models
 
-__all__ = ["db"]
+__all__ = ["analytics", "db", "models"]
