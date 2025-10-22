@@ -1,16 +1,19 @@
 import json
-import os
 from typing import List
 
 import pandas as pd
 import streamlit as st
 
+from app_layout import initialize_page
 from sync_wb import load_wb_products_df, sync_wb
 from wb_client import get_token_from_secrets
 
-st.set_page_config(page_title="WB Products", layout="wide")
-
-st.title("WB Products")
+initialize_page(
+    page_title="Wildberries Products",
+    page_icon="🟣",
+    current_page="pages/WB_Products.py",
+    description="Просмотр ассортимента и синхронизация с Wildberries API",
+)
 
 with st.sidebar:
     st.header("Wildberries API")

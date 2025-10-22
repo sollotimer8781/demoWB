@@ -2,12 +2,16 @@ from typing import List, Optional
 
 import streamlit as st
 
+from app_layout import initialize_page
 from ozon_client import get_credentials_from_secrets
 from sync_ozon import load_ozon_products_df, sync_ozon
 
-st.set_page_config(page_title="OZON Products", layout="wide")
-
-st.title("OZON Products")
+initialize_page(
+    page_title="Ozon Products",
+    page_icon="🛒",
+    current_page="pages/2_OZON_Products.py",
+    description="Просмотр и синхронизация ассортимента из Ozon Seller API",
+)
 
 client_id, api_key = get_credentials_from_secrets()
 

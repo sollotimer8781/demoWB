@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import streamlit as st
 
+from app_layout import initialize_page
 from data_workspace_repository import (
     ALLOWED_SCOPE_TYPES,
     ALLOWED_VALUE_TYPES,
@@ -21,8 +22,12 @@ from data_workspace_repository import (
 )
 from product_repository import load_products_df
 
-st.set_page_config(page_title="Data Workspace", layout="wide")
-st.title("Data Workspace")
+initialize_page(
+    page_title="Data Workspace",
+    page_icon="📊",
+    current_page="pages/Data_Workspace.py",
+    description="Рабочее место коэффициентов и аналитики",
+)
 
 COEFFICIENT_COLUMNS = [
     "id",

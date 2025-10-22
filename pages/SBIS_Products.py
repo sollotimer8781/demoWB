@@ -9,12 +9,16 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import pandas as pd
 import streamlit as st
 
+from app_layout import initialize_page
 from product_repository import ensure_schema, get_connection, load_products_df, upsert_products
 
 
-st.set_page_config(page_title="SBIS Products", layout="wide")
-
-st.title("SBIS Products")
+initialize_page(
+    page_title="SBIS Products",
+    page_icon="📄",
+    current_page="pages/SBIS_Products.py",
+    description="Импорт ассортимента SBIS и загрузка в локальное хранилище",
+)
 
 
 def _list_sample_files() -> List[Path]:
