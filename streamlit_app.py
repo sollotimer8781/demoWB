@@ -11,7 +11,10 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app_layout import APP_PAGES, initialize_page
 from demowb.db import SessionLocal, get_database_url
+from demowb.ui import inject_css
 from models import Product, ProductImportLog
+
+CSS_PATH = Path(__file__).resolve().parent / "demowb" / "styles.css"
 
 initialize_page(
     page_title="Центр управления",
@@ -19,7 +22,12 @@ initialize_page(
     current_page="streamlit_app.py",
     show_title=False,
     description="Единая точка входа Streamlit для работы с ассортиментом маркетплейсов.",
+    inject_theme=False,
 )
+
+css_applied = inject_css(CSS_PATH)
+if not css_applied:
+    st.warning("Кастомные стили темы не были применены.")
 
 st.markdown(
     """

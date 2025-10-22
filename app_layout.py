@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 
 from demowb.db import get_database_url, init_db
+from demowb.ui import inject_css
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ APP_PAGES = [
 _APP_NAME = "demoWB — управление маркетплейсами"
 _ENV_LOADED = False
 _DATABASE_READY_KEY = "_app_database_ready"
+_CSS_PATH = Path(__file__).resolve().parent / "demowb" / "styles.css"
 
 
 def _load_environment() -> None:
@@ -72,9 +74,9 @@ def render_app_header() -> None:
     description = _describe_database(database_url)
     st.markdown(
         f"""
-        <div style="padding:1.1rem 1.4rem;border-radius:0.75rem;background:linear-gradient(90deg,#f4f5ff,#ffffff);">
-            <div style="font-size:1.1rem;font-weight:600;color:#353E7C;">{_APP_NAME}</div>
-            <div style="font-size:0.9rem;color:#4C5BD5;">База данных: {description}</div>
+        <div class="demowb-app-header">
+            <div class="demowb-app-header__title">{_APP_NAME}</div>
+            <div class="demowb-app-header__subtitle">База данных: {description}</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -100,9 +102,14 @@ def initialize_page(
     current_page: str,
     description: Optional[str] = None,
     show_title: bool = True,
+    inject_theme: bool = True,
 ) -> None:
     _load_environment()
     st.set_page_config(page_title=page_title, page_icon=page_icon, layout="wide")
+    if inject_theme:
+        css_applied = inject_css(_CSS_PATH)
+        if not css_applied:
+            logger.warning("Не удалось применить стили из %s", _CSS_PATH)
     _ensure_database_ready()
     render_app_header()
     render_navigation(current_page)

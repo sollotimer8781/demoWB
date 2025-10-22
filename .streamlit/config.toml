@@ -1,11 +1,12 @@
 [server]
 headless = true
 enableStaticServing = true
+maxUploadSize = 500
 
 [theme]
-base = "light"
-primaryColor = "#4C5BD5"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F6F8FE"
-textColor = "#1F1F1F"
+base = "dark"
+primaryColor = "#6C5DD3"
+backgroundColor = "#0F111E"
+secondaryBackgroundColor = "#161A2B"
+textColor = "#F4F5FF"
 font = "sans serif"
