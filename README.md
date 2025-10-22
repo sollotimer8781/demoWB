@@ -1,89 +1,67 @@
-# demoWB — проектный аудит и руководство по запуску
+# demoWB — управление ассортиментом маркетплейсов
 
 ## Краткое резюме
-- Репозиторий содержит несколько Streamlit-страниц для работы с ассортиментом маркетплейсов (Wildberries, Ozon, SBIS) и экспериментальные утилиты по обработке Excel-файлов.
-- Основное хранилище данных — SQLite (`sqlite.db`) с таблицей `product_items`; параллельно присутствует заготовка под SQLAlchemy-модель `Product`, но без миграций и с ошибкой инициализации `engine` в `db.py`.
-- Для интеграций с внешними API требуется настроить секреты (`WB_API_TOKEN`, `OZON_CLIENT_ID`, `OZON_API_KEY`). Реальная интеграция с SBIS ещё не реализована — доступен только импорт из файлов.
-- Запуск приложений возможен постранично (`streamlit run pages/<page>.py`), центрального `app.py`/`Home.py` в репозитории нет.
-- Зависимости перечислены в `requirements.txt` без фиксации версий; фактически во встроенном виртуальном окружении используются `streamlit 1.50.0`, `pandas 2.3.3`, `openpyxl 3.1.5`, `xlsxwriter 3.2.9`, `httpx 0.28.1`, `SQLAlchemy 2.0.44`.
+- Репозиторий содержит набор Streamlit-страниц для работы с ассортиментом Wildberries, Ozon и SBIS, а также инструменты для управления ценами и анализа.
+- Страница `pages/1_Products.py` превращена в полноценный каталог товаров: поддерживает редактирование через `st.data_editor`, управление пользовательскими полями (`custom_fields`), импорт Excel/CSV с журналом операций и экспорт с фильтрами.
+- База данных для каталога переведена на SQLAlchemy-модель `Product` с хранением пользовательских колонок в JSON (`custom_fields`). Добавлена модель `ProductImportLog` для учёта импортов.
+- Миграции Alembic настроены (директория `alembic/`), начальная миграция создаёт таблицы `products` и `product_import_logs`.
+- Сохранены существующие сценарии работы с SQLite (`product_items`) для страниц WB/Ozon/SBIS и рабочее место коэффициентов.
+- В папке `data/` появились шаблоны для импорта (`products_import_sample.csv`/`.xlsx`), которыми можно пользоваться без внешних API.
 
 ## Структура репозитория
 ```
 /home/engine/project
-├── pages/                    # Активные Streamlit-страницы
-│   ├── 1_Products.py         # Мок-страница каталога продукции
-│   ├── 2_OZON_Products.py    # Просмотр/синхронизация товаров Ozon
-│   ├── WB_Products.py        # Просмотр/синхронизация товаров Wildberries
-│   ├── SBIS_Products.py      # Импорт ассортимента SBIS из Excel/CSV
-│   └── Data_Workspace.py     # Рабочее место для коэффициентов и аналитики
-├── sync.py                   # Синхронизация мок-данных (WB mock)
-├── sync_wb.py                # Синхронизация Wildberries в SQLite
-├── sync_ozon.py              # Синхронизация Ozon в SQLite
-├── wb_client.py              # Клиент WB API (httpx)
-├── ozon_client.py            # Клиент Ozon Seller API (httpx)
-├── product_repository.py     # Работа с SQLite (таблица product_items)
-├── data_workspace_repository.py  # Кэфы/правила ценообразования в SQLite
-├── db.py / models.py         # Черновая обёртка SQLAlchemy (таблица products)
-├── data/sample_products.json # Исходник мок-товаров для WB
-├── sqlite.db                 # Фактическое хранилище продуктов
-├── *.py (alex.py, v0.py, v3.py, V4.py)  # Наследие: утилиты по Excel-каталогу
-└── тест данные.xlsx          # Пример входного Excel-файла
+├── alembic/                 # Конфигурация и версии миграций
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/20241022_0001_create_products_tables.py
+├── alembic.ini              # Конфигурация Alembic
+├── pages/
+│   ├── 1_Products.py        # Управление каталогом с import/export и кастомными полями
+│   ├── 2_OZON_Products.py   # Просмотр/синхронизация товаров Ozon
+│   ├── WB_Products.py       # Просмотр/синхронизация Wildberries
+│   ├── SBIS_Products.py     # Импорт ассортимента SBIS из Excel/CSV
+│   └── Data_Workspace.py    # Работа с коэффициентами и аналитикой
+├── product_service.py       # Сервисный слой для работы с Product/ProductImportLog
+├── models.py                # SQLAlchemy-модели Product и ProductImportLog
+├── db.py                    # Инициализация SQLAlchemy (engine, SessionLocal, Base)
+├── sync.py                  # Загрузка демонстрационных товаров (WB mock)
+├── data/
+│   ├── sample_products.json
+│   ├── products_import_sample.csv
+│   └── products_import_sample.xlsx
+├── requirements.txt
+└── ... (остальные клиентские и утилитарные скрипты)
 ```
 
 ## Streamlit-страницы
-| Файл | Назначение | Источник данных | Требуемые секреты/настройки |
-|------|------------|-----------------|------------------------------|
-| `pages/1_Products.py` | Мок-каталог товаров (Wildberries) с поиском и карточками. При первом запуске загружает данные из `data/sample_products.json` (через `sync.py`). | SQLite (`data.db` по умолчанию через SQLAlchemy) | `DATABASE_URL` (опционально); отсутствие `.streamlit/secrets.toml` приводит к исключению при импорте `db.py` вне Streamlit. |
-| `pages/2_OZON_Products.py` | Просмотр и синхронизация ассортимента через Ozon Seller API; фильтры и детальный просмотр. | SQLite (`sqlite.db`, таблица `product_items`) | `OZON_CLIENT_ID`, `OZON_API_KEY` в `st.secrets`. |
-| `pages/WB_Products.py` | Поддержка синхронизации карточек Wildberries (cursor API v1/v2), визуализация и фильтры. | SQLite (`sqlite.db`, `product_items`) | `WB_API_TOKEN` в `st.secrets`. |
-| `pages/SBIS_Products.py` | Импорт ассортимента SBIS из Excel/CSV, dry-run, загрузка в `product_items`, просмотр и фильтры. | SQLite (`sqlite.db`) | Секреты не требуются; ожидаются шаблоны в `data/sbis`, но они отсутствуют. |
-| `pages/Data_Workspace.py` | Управление коэффициентами (`coefficients`) и предпросмотр данных из `product_items`; экспорт/импорт CSV/XLSX, генерация коэффициентов. | SQLite (`sqlite.db`, таблицы `product_items`, `coefficients`, `pricing_rules`) | Секреты не требуются. |
+| Файл | Назначение | Источник данных | Требуемые настройки |
+|------|------------|-----------------|---------------------|
+| `pages/1_Products.py` | Каталог товаров с CRUD, custom fields, импортом/экспортом и журналом импортов. Поддерживает шаблоны, массовые правки и центральный `st.data_editor`. | SQLAlchemy (`Product`, таблица `products`) | `DATABASE_URL` (опционально; по умолчанию `sqlite:///data.db`). |
+| `pages/2_OZON_Products.py` | Просмотр и синхронизация ассортимента через Ozon Seller API. | SQLite (`sqlite.db`, таблица `product_items`) | `OZON_CLIENT_ID`, `OZON_API_KEY` в `st.secrets`. |
+| `pages/WB_Products.py` | Синхронизация карточек Wildberries, фильтры и визуализация. | SQLite (`sqlite.db`, `product_items`) | `WB_API_TOKEN` в `st.secrets`. |
+| `pages/SBIS_Products.py` | Импорт ассортимента SBIS из Excel/CSV, dry-run и загрузка в `product_items`. | SQLite (`sqlite.db`) | Настройка секретов не требуется. |
+| `pages/Data_Workspace.py` | Управление коэффициентами (`coefficients`) и предпросмотр данных, экспорт/импорт CSV/XLSX. | SQLite (`sqlite.db`) | Настройка секретов не требуется. |
 
-> **Важно:** центрального файла `app.py`/`Home.py` нет, поэтому переключение между страницами через стандартное меню Streamlit недоступно. Каждая страница запускается отдельной командой.
+> Отдельного `app.py` нет: страницы запускаются командой `streamlit run pages/<имя>.py`.
 
-## База данных и модели
-- **SQLite** — основное хранилище (`/home/engine/project/sqlite.db`).
-  - Таблица `product_items` создаётся в `product_repository.ensure_schema()` и используется Wildberries, Ozon и SBIS страницами.
-  - Таблицы `coefficients` и `pricing_rules` управляются через `data_workspace_repository.py`.
-- **SQLAlchemy** — файл `db.py` предполагает использование `DATABASE_URL` (по умолчанию `sqlite:///data.db`), но содержит опечатку `gine = _create_engine()` и выбрасывает `StreamlitSecretNotFoundError` при отсутствии `.streamlit/secrets.toml`. Таблица `products` объявлена в `models.py`, миграций Alembic нет.
-- **Миграции** отсутствуют; структура БД поддерживается вручную через `ensure_schema`.
+## База данных и миграции
+- **Основной каталог** использует SQLAlchemy:
+  - `Product`: SKU, NM ID, базовые атрибуты, флаг активности, список изображений и JSON-поле `custom_fields` (через `MutableDict`).
+  - `ProductImportLog`: информация о каждом импортировании (файл, статус, статистика, ошибки, детали).
+- **Alembic**: конфигурация `alembic.ini` + стартовая миграция `20241022_0001_create_products_tables.py`. Для применения схемы выполните `alembic upgrade head` (см. инструкцию ниже).
+- **Наследованный SQLite-слой** (`product_items`) по-прежнему используется страницами Ozon/WB/SBIS.
 
-## Импорт/экспорт данных
-- `pages/SBIS_Products.py` — полноценный мастер импорта Excel/CSV: выбор ключей, картирование колонок, dry-run (`_simulate_upsert`) и запись в SQLite. Экспорт отсутствует, но доступны детальные просмотры.
-- `pages/Data_Workspace.py` — экспорт коэффициентов в CSV/XLSX и импорт с опцией полной замены (`replace_all_coefficients`).
-- `alex.py`, `v0.py`, `v3.py`, `V4.py` — наследуемые утилиты для объединения Excel-файлов и поддержания `catalog.csv`; в текущий основной поток не интегрированы.
+## Импорт и экспорт товаров (страница `1_Products.py`)
+- **Редактирование**: `st.data_editor` позволяет добавлять строки, менять значения, скрывать/отображать кастомные колонки, выполнять массовые правки.
+- **Пользовательские колонки**: данные сохраняются в `Product.custom_fields`. Можно добавлять новые поля из интерфейса и скрывать/показывать их в таблице.
+- **Импорт**: поддержка CSV/XLSX (через pandas). Доступны шаблоны, выбор ключевого столбца (`sku` или `nm_id`), маппинг системных колонок, настройка custom_fields и валидация. Результат фиксируется в журнале импортов.
+- **Экспорт**: фильтрация по поиску/бренду/статусу, выгрузка в CSV или Excel с выбранными custom_fields.Предпросмотр первых строк сопровождает кнопки скачивания.
+- **Журнал**: вкладка «Журнал импортов» показывает последние операции и позволяет скачать CSV-лог.
+- **Тестовые данные**: готовые файлы `data/products_import_sample.csv` и `.xlsx`, а также кнопка «Загрузить тестовые данные (WB mock)», которая наполняет таблицу демо-карточками.
 
-## Интеграции с внешними API
-- **Wildberries** — `wb_client.py` реализует cursor API (v1/v2) с ретраями, нормализацией карточек и преобразованием медиа. Требуется `WB_API_TOKEN` в `st.secrets` или переменных окружения Streamlit.
-- **Ozon Seller API** — `ozon_client.py` реализует методы `/v2/product/list` и `/v3/product/info/list`, объединяет карточки и сохраняет в SQLite. Требуются `OZON_CLIENT_ID` и `OZON_API_KEY`.
-- **SBIS** — API-интеграция не реализована; вместо этого есть UI для импорта файлов и пометка в интерфейсе о будущем подключении.
-
-## Зависимости
-`requirements.txt` содержит непинованные пакеты:
-```
-streamlit
-pandas
-openpyxl
-xlsxwriter
-httpx
-sqlalchemy
-```
-Фактические версии, установленные во встроенном виртуальном окружении `.venv`:
-- Streamlit — **1.50.0**
-- pandas — **2.3.3**
-- openpyxl — **3.1.5**
-- XlsxWriter — **3.2.9**
-- httpx — **0.28.1**
-- SQLAlchemy — **2.0.44**
-
-Рекомендуется зафиксировать версии в `requirements.txt/poetry.lock`, чтобы исключить неожиданные регрессии.
-
-## Настройка и запуск локально
-1. **Предварительные требования**
-   - Python 3.11+
-   - Установленный `virtualenv` или `uv` (опционально)
-   - Доступ к API-ключам (WB/Ozon) при необходимости синхронизации.
-2. **Развёртывание окружения**
+## Настройка и запуск
+1. **Создайте окружение и установите зависимости**
    ```bash
    cd /home/engine/project
    python3 -m venv .venv
@@ -91,49 +69,28 @@ sqlalchemy
    pip install --upgrade pip
    pip install -r requirements.txt
    ```
-3. **Конфигурация секретов Streamlit** (файл `.streamlit/secrets.toml`):
-   ```toml
-   [secrets]
-   WB_API_TOKEN = "..."
-   OZON_CLIENT_ID = "..."
-   OZON_API_KEY = "..."
-   # при необходимости подключить внешнюю БД
-   DATABASE_URL = "postgresql+psycopg://user:pass@host:5432/dbname"
-   ```
-   При использовании только локального SQLite требования к секретам можно опустить, но часть страниц (WB/Ozon) будет работать только в режиме просмотра без синхронизации.
-4. **Запуск страниц** (каждая отдельно):
+2. **Примените миграции** (создание таблиц `products` и `product_import_logs`):
    ```bash
-   streamlit run pages/1_Products.py        # мок-данные
-   streamlit run pages/WB_Products.py       # Wildberries
-   streamlit run pages/2_OZON_Products.py   # Ozon Seller API
-   streamlit run pages/SBIS_Products.py     # Импорт SBIS
-   streamlit run pages/Data_Workspace.py    # Коэффициенты
+   alembic upgrade head
    ```
-   При необходимости используйте `--server.headless true --server.port <port>`.
+   По умолчанию будет использована база `sqlite:///data.db`. Переопределить URL можно переменной `DATABASE_URL` или значением в `st.secrets`.
+3. **(Опционально) задайте секреты Streamlit** в `.streamlit/secrets.toml`, если нужна синхронизация с API маркетплейсов.
+4. **Запускайте нужную страницу**:
+   ```bash
+   streamlit run pages/1_Products.py        # Каталог с import/export
+   streamlit run pages/2_OZON_Products.py   # Ozon Seller API
+   streamlit run pages/WB_Products.py       # Wildberries API
+   streamlit run pages/SBIS_Products.py     # Импорт SBIS
+   streamlit run pages/Data_Workspace.py    # Коэффициенты и аналитика
+   ```
+   Используйте параметры `--server.headless true --server.port <port>`, если требуется.
 
-### Результаты локального запуска
-- Проверен запуск `streamlit run pages/1_Products.py` и `streamlit run pages/WB_Products.py` в headless-режиме — сервер стартует, страницы отображают предупреждения об отсутствующих секретах.
-- Скриншоты не приложены из-за текстового окружения; при наличии токенов необходимо протестировать синхронизацию вручную.
-
-## Выявленные пробелы и риски
-1. Ошибка инициализации SQLAlchemy (`gine = _create_engine()`) и жёсткая зависимость `db.py` от наличия `st.secrets` мешают использованию моделей вне Streamlit.
-2. Отсутствует единая точка входа Streamlit (`app.py`/`Home.py`), поэтому навигация между страницами неудобна.
-3. Нет миграций Alembic и единого слоя доступа к данным — coexist двух подходов (SQLAlchemy + ручной SQLite).
-4. `product_repository.py` хардкодит абсолютный путь `/home/engine/project/sqlite.db`, что усложняет деплой и тестирование.
-5. Нет автоматических тестов, проверок линтеров и данных фикстур.
-6. В `requirements.txt` отсутствуют конкретные версии; возможны несовместимости при развёртывании.
-7. Шаблоны файлов для SBIS, упомянутые в UI, отсутствуют в `data/sbis`.
-8. В репозитории остаются устаревшие скрипты (`alex.py`, `v0.py`, `v3.py`, `V4.py`) без документации и интеграции.
-
-## Рекомендации и последующие задачи
-1. **Починить модуль `db.py`**: исправить `engine = _create_engine()`, добавить безопасное поведение при отсутствии `st.secrets`, вынести конфигурацию в `.env`/`settings`.
-2. **Добавить точку входа Streamlit** (`app.py` или `Home.py`) с меню по страницам и едиными настройками `st.set_page_config`.
-3. **Унифицировать доступ к данным**: выбрать SQLAlchemy или чистый SQLite, вынести пути в конфигурацию, подготовить Alembic-миграции.
-4. **Подготовить шаблоны и документацию** для импорта (папка `data/sbis`, описание ожидаемых колонок) и удалить/архивировать устаревшие прототипы Excel.
-5. **Настроить CI/проверки качества**: линтеры, `pytest`, статический анализ, автоматический импортер зависимостей.
-6. **Расширить интеграции**: реализовать SBIS API-клиент, добавить пагинацию и обработку ошибок для WB/Ozon, предусмотреть логирование.
-7. **Зафиксировать версии зависимостей** и добавить инструкции по обновлению.
-8. **Документировать переменные окружения** и сценарии деплоя (Docker/Compose при необходимости).
+## Текущие ограничения и дальнейшие шаги
+1. Страницы Ozon/WB/SBIS продолжают использовать отдельное хранилище `product_items` (SQLite); требуется унификация с SQLAlchemy-моделью `Product`.
+2. Зависимости в `requirements.txt` не зафиксированы по версиям; рекомендуется добавить pinning и автоматические проверки.
+3. Не настроены тесты/CI и автоматизированная проверка данных при импорте.
+4. Отсутствует общая точка входа (`Home.py`) и навигация между страницами.
+5. В репозитории остаются старые утилиты (`alex.py`, `v0.py`, `v3.py`, `V4.py`), которые можно вынести или архивировать.
 
 ---
-Настоящий README фиксирует текущее состояние проекта demoWB и служит отправной точкой для дальнейшего развития и упорядочивания кода.
+Документ отражает текущее состояние проекта и служит руководством по использованию обновлённого каталога товаров и инструментов импорта/экспорта.

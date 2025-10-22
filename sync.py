@@ -63,6 +63,15 @@ def _ensure_optional_str(value: Any) -> Optional[str]:
     return text or None
 
 
+def _ensure_sku(payload: Dict[str, Any], fallback_nm_id: Optional[int]) -> Optional[str]:
+    sku = _ensure_optional_str(payload.get("sku"))
+    if not sku:
+        sku = _ensure_optional_str(payload.get("vendor_code"))
+    if not sku and fallback_nm_id is not None:
+        sku = f"WB-{fallback_nm_id}"
+    return sku
+
+
 def _ensure_list_of_strings(value: Any) -> List[str]:
     if not value:
         return []
@@ -110,33 +119,46 @@ def sync_products(*, use_mock: bool = True) -> Tuple[int, int]:
 
             title = _ensure_title(payload.get("title"))
             brand = _ensure_optional_str(payload.get("brand"))
+            category = _ensure_optional_str(payload.get("category") or payload.get("subject"))
             price = _safe_float(payload.get("price"))
             stock = _safe_int(payload.get("stock"))
             image_urls = _ensure_list_of_strings(payload.get("image_urls"))
-            extra = _ensure_dict(payload.get("extra"))
+            custom_fields = _ensure_dict(payload.get("extra"))
+            sku = _ensure_sku(payload, nm_id)
+            barcode = _ensure_optional_str(payload.get("barcode"))
 
             product = session.scalars(select(Product).where(Product.nm_id == nm_id)).first()
             if product is None:
                 product = Product(
                     nm_id=nm_id,
+                    sku=sku,
                     title=title,
                     brand=brand,
+                    category=category,
                     price=price,
                     stock=stock,
+                    barcode=barcode,
                     image_urls=image_urls,
-                    extra=extra,
+                    custom_fields=custom_fields,
+                    is_active=True,
                     created_at=now,
                     updated_at=now,
                 )
                 session.add(product)
                 inserted += 1
             else:
+                product.sku = sku
                 product.title = title
                 product.brand = brand
+                product.category = category
                 product.price = price
                 product.stock = stock
+                product.barcode = barcode
                 product.image_urls = image_urls
-                product.extra = extra
+                existing_custom = dict(product.custom_fields or {})
+                existing_custom.update(custom_fields)
+                product.custom_fields = existing_custom
+                product.is_active = True
                 product.updated_at = now
                 updated += 1
         session.commit()

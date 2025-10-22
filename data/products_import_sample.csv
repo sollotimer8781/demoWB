@@ -1,0 +1,4 @@
+sku,nm_id,title,brand,category,price,stock,barcode,is_active,color,size,season,volume_l
+WB-20001,20001,Футболка унисекс с принтом,DemoWear,Одежда,1499,60,9900011122234,True,Белый,L,SS24,
+WB-20002,20002,Легинсы спортивные,DemoWear,Спорт,1799,35,9900011122235,True,Черный,S,AW24,
+WB-20003,20003,Рюкзак городской водоотталкивающий,Urban Demo,Аксессуары,2199,22,9900011122236,True,Серый,,,20.0
