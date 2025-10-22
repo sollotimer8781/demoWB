@@ -2,26 +2,8 @@ from typing import Dict, List, Tuple
 
 import streamlit as st
 
-from product_repository import (
-    ensure_schema,
-    get_connection as get_product_connection,
-    load_products_df,
-    upsert_products,
-)
+from product_repository import load_products_df, upsert_products
 from wb_client import WBClient, get_token_from_secrets, normalize_card_to_product
-
-DB_PATH = "/home/engine/project/sqlite.db"
-TABLE_NAME = "product_items"
-
-
-def get_connection():
-    conn = get_product_connection()
-    ensure_schema(conn)
-    return conn
-
-
-def init_db(conn) -> None:
-    ensure_schema(conn)
 
 
 def upsert_products_wb(products: List[Dict]) -> Tuple[int, int]:

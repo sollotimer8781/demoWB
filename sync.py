@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlalchemy import select
 
-from db import SessionLocal, init_db
+from demowb.db import SessionLocal, init_db
 from models import Product
 from wb_client_mock import fetch_products_mock
 

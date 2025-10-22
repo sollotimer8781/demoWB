@@ -3,8 +3,10 @@ from typing import List
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
 from app_layout import initialize_page
+from demowb.db import init_db
 from sync_wb import load_wb_products_df, sync_wb
 from wb_client import get_token_from_secrets
 
@@ -47,9 +49,25 @@ if refresh:
     load_wb_products_df.clear()
 
 # Data loading (cached)
-df = load_wb_products_df()
+try:
+    df = load_wb_products_df()
+except SQLAlchemyError as exc:  # noqa: BLE001
+    df = None
+    load_wb_products_df.clear()
+    st.error(f"Не удалось обратиться к базе данных Wildberries: {exc}")
+    if st.button("Инициализировать БД", type="primary"):
+        try:
+            init_db()
+            st.success("База данных инициализирована. Обновите страницу или нажмите 'Refresh'.")
+        except Exception as init_exc:  # noqa: BLE001
+            st.error(f"Ошибка инициализации базы: {init_exc}")
+    st.stop()
+except Exception as exc:  # noqa: BLE001
+    df = None
+    st.error(f"Произошла ошибка при загрузке данных Wildberries: {exc}")
+    st.stop()
 
-if df.empty:
+if df is None or df.empty:
     if not token:
         st.info(
             "Не найден WB_API_TOKEN. Добавьте секрет в .streamlit/secrets.toml:\n\n"

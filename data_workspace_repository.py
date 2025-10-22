@@ -1,80 +1,17 @@
 from __future__ import annotations
 
 import json
-import sqlite3
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from product_repository import DB_PATH, ensure_schema as ensure_products_schema
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from demowb.db import SessionLocal, session_scope
+from models import Coefficient, ProductItem
 
 ALLOWED_SCOPE_TYPES = {"GLOBAL", "CATEGORY", "PRODUCT"}
 ALLOWED_VALUE_TYPES = {"TEXT", "NUMBER"}
-
-
-def get_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    ensure_products_schema(conn)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS coefficients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scope_type TEXT NOT NULL CHECK(scope_type IN ('GLOBAL', 'CATEGORY', 'PRODUCT')),
-            scope_ref TEXT,
-            name TEXT NOT NULL,
-            value TEXT NOT NULL,
-            value_type TEXT NOT NULL DEFAULT 'TEXT' CHECK(value_type IN ('TEXT', 'NUMBER')),
-            unit TEXT,
-            extra TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS coefficients_updated_at_trigger
-        AFTER UPDATE ON coefficients
-        FOR EACH ROW
-        BEGIN
-            UPDATE coefficients SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
-        END;
-        """
-    )
-    conn.execute(
-        """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_coefficients_scope_name
-        ON coefficients (scope_type, IFNULL(scope_ref, ''), name)
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS pricing_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            expression TEXT NOT NULL,
-            priority INTEGER NOT NULL DEFAULT 0,
-            is_enabled INTEGER NOT NULL DEFAULT 1,
-            extra TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TRIGGER IF NOT EXISTS pricing_rules_updated_at_trigger
-        AFTER UPDATE ON pricing_rules
-        FOR EACH ROW
-        BEGIN
-            UPDATE pricing_rules SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
-        END;
-        """
-    )
-    conn.commit()
 
 
 def _parse_json(value: Any) -> Any:
@@ -91,24 +28,6 @@ def _parse_json(value: Any) -> Any:
             return parsed
         return {}
     return {}
-
-
-def _dump_json(value: Any) -> str:
-    if value in (None, ""):
-        return json.dumps({}, ensure_ascii=False)
-    if isinstance(value, str):
-        value_str = value.strip()
-        if not value_str:
-            return json.dumps({}, ensure_ascii=False)
-        try:
-            parsed = json.loads(value_str)
-        except json.JSONDecodeError as exc:  # noqa: TRY003
-            raise ValueError(f"Некорректный JSON в extra: {exc}") from exc
-        return json.dumps(parsed, ensure_ascii=False)
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except TypeError as exc:  # noqa: TRY003
-        raise ValueError(f"Некорректное значение JSON: {value}") from exc
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -130,48 +49,65 @@ def _to_float(value: Any) -> Optional[float]:
     raise ValueError(f"Не удалось преобразовать '{value}' к числу")
 
 
+def _normalize_extra(value: Any) -> Dict[str, Any]:
+    if value in (None, "", "null"):
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:  # noqa: TRY003
+            raise ValueError(f"Некорректный JSON в extra: {exc}") from exc
+        if isinstance(parsed, dict):
+            return parsed
+        return {"value": parsed}
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError) as exc:  # noqa: TRY003
+        raise ValueError(f"Некорректное значение JSON: {value}") from exc
+    if isinstance(value, dict):
+        return dict(value)
+    return {"value": value}
+
+
 def fetch_coefficients() -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        ensure_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT id, scope_type, scope_ref, name, value, value_type, unit, extra, updated_at
-            FROM coefficients
-            ORDER BY scope_type, name, scope_ref
-            """
-        ).fetchall()
+    with SessionLocal() as session:
+        stmt = select(Coefficient).order_by(Coefficient.scope_type, Coefficient.name, Coefficient.scope_ref)
+        rows = session.scalars(stmt).all()
 
     result: List[Dict[str, Any]] = []
     for row in rows:
-        value_type = (row["value_type"] or "TEXT").upper()
-        raw_value: Any = row["value"]
+        value_type = (row.value_type or "TEXT").upper()
+        raw_value: Any = row.value
         display_value: Any = raw_value
-        if value_type == "NUMBER":
+        if value_type == "NUMBER" and raw_value is not None:
             try:
                 display_value = _to_float(raw_value)
             except ValueError:
                 display_value = raw_value
-        extra_parsed = _parse_json(row["extra"])
-        extra_display = ""
-        if extra_parsed:
-            extra_display = json.dumps(extra_parsed, ensure_ascii=False)
+        extra_payload = row.extra or {}
+        extra_display = json.dumps(extra_payload, ensure_ascii=False) if extra_payload else ""
         result.append(
             {
-                "id": row["id"],
-                "scope_type": row["scope_type"],
-                "scope_ref": row["scope_ref"],
-                "name": row["name"],
+                "id": row.id,
+                "scope_type": (row.scope_type or "").upper(),
+                "scope_ref": row.scope_ref,
+                "name": row.name,
                 "value": display_value,
                 "value_type": value_type,
-                "unit": row["unit"],
+                "unit": row.unit,
                 "extra": extra_display,
-                "updated_at": row["updated_at"],
+                "updated_at": row.updated_at,
             }
         )
     return result
 
 
-def _prepare_coefficient_payload(record: Dict[str, Any]) -> Tuple[Optional[int], str, Optional[str], str, str, str, Optional[str], str]:
+def _prepare_coefficient_payload(record: Dict[str, Any]) -> Tuple[Optional[int], Dict[str, Any]]:
     coeff_id = record.get("id")
     if coeff_id is not None:
         coeff_id = int(coeff_id)
@@ -197,22 +133,49 @@ def _prepare_coefficient_payload(record: Dict[str, Any]) -> Tuple[Optional[int],
     value_raw = record.get("value")
     if value_type_raw == "NUMBER":
         value_float = _to_float(value_raw)
-        value_str = f"{value_float}"
+        value_value = f"{value_float}"
     else:
-        value_str = str(value_raw or "").strip()
-        if not value_str:
+        value_value = str(value_raw or "").strip()
+        if not value_value:
             raise ValueError("Поле 'value' обязательно для заполнения")
 
     unit_value = record.get("unit")
     if unit_value is not None:
         unit_value = str(unit_value).strip() or None
 
-    extra_value = _dump_json(record.get("extra"))
+    extra_value = _normalize_extra(record.get("extra"))
 
     if scope_type_raw == "PRODUCT" and not scope_ref_value:
         raise ValueError("Для scope_type=PRODUCT необходимо указать scope_ref")
 
-    return coeff_id, scope_type_raw, scope_ref_value, name_raw, value_str, value_type_raw, unit_value, extra_value
+    payload = {
+        "scope_type": scope_type_raw,
+        "scope_ref": scope_ref_value,
+        "name": name_raw,
+        "value": value_value,
+        "value_type": value_type_raw,
+        "unit": unit_value,
+        "extra": extra_value,
+    }
+    return coeff_id, payload
+
+
+def _check_duplicate(session: Session, payload: Dict[str, Any], coeff_id: Optional[int]) -> None:
+    scope_ref_normalized = payload["scope_ref"] or ""
+    stmt = (
+        select(Coefficient.id)
+        .where(
+            Coefficient.scope_type == payload["scope_type"],
+            func.coalesce(Coefficient.scope_ref, "") == scope_ref_normalized,
+            Coefficient.name == payload["name"],
+        )
+        .limit(1)
+    )
+    if coeff_id is not None:
+        stmt = stmt.where(Coefficient.id != coeff_id)
+    duplicate = session.execute(stmt).scalar_one_or_none()
+    if duplicate is not None:
+        raise ValueError("Коэффициент с такими scope_type, scope_ref и name уже существует")
 
 
 def apply_coefficients_changes(*, delete_ids: Sequence[int], upserts: Sequence[Dict[str, Any]]) -> Dict[str, int]:
@@ -222,150 +185,100 @@ def apply_coefficients_changes(*, delete_ids: Sequence[int], upserts: Sequence[D
     inserted = 0
     updated = 0
     deleted = 0
+    now = datetime.utcnow()
 
-    with get_connection() as conn:
-        ensure_schema(conn)
-        conn.execute("BEGIN")
-        try:
-            if delete_ids:
-                for delete_id in delete_ids:
-                    cur = conn.execute("DELETE FROM coefficients WHERE id = ?", (int(delete_id),))
-                    deleted += cur.rowcount
+    delete_ids_int = [int(value) for value in delete_ids]
 
-            for record in upserts:
-                (
-                    coeff_id,
-                    scope_type,
-                    scope_ref,
-                    name,
-                    value,
-                    value_type,
-                    unit,
-                    extra,
-                ) = _prepare_coefficient_payload(record)
+    with session_scope() as session:
+        if delete_ids_int:
+            deleted = (
+                session.query(Coefficient)
+                .filter(Coefficient.id.in_(delete_ids_int))
+                .delete(synchronize_session=False)
+            )
 
-                params: List[Any] = [scope_type, scope_ref or "", name]
-                query = (
-                    "SELECT id FROM coefficients "
-                    "WHERE scope_type = ? AND IFNULL(scope_ref, '') = ? AND name = ?"
-                )
-                if coeff_id is not None:
-                    query += " AND id <> ?"
-                    params.append(coeff_id)
-                duplicate = conn.execute(query, params).fetchone()
-                if duplicate:
-                    raise ValueError(
-                        "Коэффициент с такими scope_type, scope_ref и name уже существует"
-                    )
-
-                if coeff_id is None:
-                    conn.execute(
-                        """
-                        INSERT INTO coefficients (scope_type, scope_ref, name, value, value_type, unit, extra)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (scope_type, scope_ref, name, value, value_type, unit, extra),
-                    )
+        for record in upserts:
+            coeff_id, payload = _prepare_coefficient_payload(record)
+            _check_duplicate(session, payload, coeff_id)
+            if coeff_id is None:
+                coefficient = Coefficient(**payload, created_at=now, updated_at=now)
+                session.add(coefficient)
+                inserted += 1
+            else:
+                coefficient = session.get(Coefficient, coeff_id)
+                if coefficient is None:
+                    coefficient = Coefficient(id=coeff_id, **payload, created_at=now, updated_at=now)
+                    session.add(coefficient)
                     inserted += 1
                 else:
-                    conn.execute(
-                        """
-                        UPDATE coefficients
-                        SET scope_type = ?, scope_ref = ?, name = ?, value = ?, value_type = ?, unit = ?, extra = ?
-                        WHERE id = ?
-                        """,
-                        (scope_type, scope_ref, name, value, value_type, unit, extra, coeff_id),
-                    )
+                    for key, value in payload.items():
+                        setattr(coefficient, key, value)
+                    coefficient.updated_at = now
                     updated += 1
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
 
     return {"inserted": inserted, "updated": updated, "deleted": deleted}
 
 
 def replace_all_coefficients(records: Sequence[Dict[str, Any]]) -> Dict[str, int]:
-    to_insert: List[Dict[str, Any]] = list(records)
+    normalized: List[Dict[str, Any]] = []
     seen_keys: set[Tuple[str, str, str]] = set()
-    for record in to_insert:
-        (
-            _coeff_id,
-            scope_type,
-            scope_ref,
-            name,
-            value,
-            value_type,
-            unit,
-            extra,
-        ) = _prepare_coefficient_payload(record)
-        key = (scope_type, scope_ref or "", name)
+
+    for record in records:
+        coeff_id, payload = _prepare_coefficient_payload(record)
+        if coeff_id is not None:
+            payload["id"] = coeff_id  # Preserve provided IDs for completeness, though not required
+        key = (payload["scope_type"], payload["scope_ref"] or "", payload["name"])
         if key in seen_keys:
             raise ValueError("В импортируемых данных есть дубли по scope_type/scope_ref/name")
         seen_keys.add(key)
-        record.update(
-            {
-                "scope_type": scope_type,
-                "scope_ref": scope_ref,
-                "name": name,
-                "value": value,
-                "value_type": value_type,
-                "unit": unit,
-                "extra": extra,
-            }
-        )
+        normalized.append(payload)
 
-    with get_connection() as conn:
-        ensure_schema(conn)
-        conn.execute("BEGIN")
-        try:
-            conn.execute("DELETE FROM coefficients")
-            for record in to_insert:
-                conn.execute(
-                    """
-                    INSERT INTO coefficients (scope_type, scope_ref, name, value, value_type, unit, extra)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        record["scope_type"],
-                        record.get("scope_ref"),
-                        record["name"],
-                        record["value"],
-                        record["value_type"],
-                        record.get("unit"),
-                        record["extra"],
-                    ),
-                )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
+    with session_scope() as session:
+        session.query(Coefficient).delete(synchronize_session=False)
+        now = datetime.utcnow()
+        for payload in normalized:
+            payload = dict(payload)
+            payload.pop("id", None)
+            session.add(Coefficient(**payload, created_at=now, updated_at=now))
 
-    return {"inserted": len(to_insert), "updated": 0, "deleted": 0}
+    return {"inserted": len(normalized), "updated": 0, "deleted": 0}
 
 
 def list_sources() -> List[str]:
-    with get_connection() as conn:
-        ensure_schema(conn)
-        rows = conn.execute(
-            "SELECT DISTINCT source FROM product_items WHERE source IS NOT NULL AND TRIM(source) <> '' ORDER BY source"
-        ).fetchall()
-    return [row[0] for row in rows if row[0]]
+    with SessionLocal() as session:
+        rows = (
+            session.execute(
+                select(ProductItem.source)
+                .where(
+                    ProductItem.source.is_not(None),
+                    func.trim(ProductItem.source) != "",
+                )
+                .distinct()
+                .order_by(ProductItem.source)
+            )
+            .scalars()
+            .all()
+        )
+    return [row for row in rows if row]
 
 
 def fetch_distinct_brands(source: str) -> List[str]:
-    with get_connection() as conn:
-        ensure_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT DISTINCT brand
-            FROM product_items
-            WHERE source = ? AND brand IS NOT NULL AND TRIM(brand) <> ''
-            ORDER BY brand COLLATE NOCASE
-            """,
-            (source,),
-        ).fetchall()
-    return [row[0] for row in rows if row[0]]
+    with SessionLocal() as session:
+        rows = (
+            session.execute(
+                select(ProductItem.brand)
+                .where(
+                    ProductItem.source == source,
+                    ProductItem.brand.is_not(None),
+                    func.trim(ProductItem.brand) != "",
+                )
+                .distinct()
+                .order_by(ProductItem.brand)
+            )
+            .scalars()
+            .all()
+        )
+    return [row for row in rows if row]
 
 
 def extract_categories_from_extra(extra_value: Any) -> List[str]:
@@ -399,15 +312,18 @@ def extract_categories_from_extra(extra_value: Any) -> List[str]:
 
 
 def fetch_distinct_categories(source: str) -> List[str]:
-    with get_connection() as conn:
-        ensure_schema(conn)
-        rows = conn.execute(
-            "SELECT extra FROM product_items WHERE source = ? AND extra IS NOT NULL AND TRIM(extra) <> ''",
-            (source,),
-        ).fetchall()
+    with SessionLocal() as session:
+        extras = (
+            session.execute(
+                select(ProductItem.extra)
+                .where(ProductItem.source == source, ProductItem.extra.is_not(None))
+            )
+            .scalars()
+            .all()
+        )
 
     categories: set[str] = set()
-    for (extra_value,) in rows:
+    for extra_value in extras:
         for category in extract_categories_from_extra(extra_value):
             categories.add(category)
 
@@ -415,28 +331,24 @@ def fetch_distinct_categories(source: str) -> List[str]:
 
 
 def fetch_products_scope_candidates(source: str, limit: int = 500) -> List[Dict[str, Any]]:
-    with get_connection() as conn:
-        ensure_schema(conn)
-        rows = conn.execute(
-            """
-            SELECT id, external_key, sku, title, brand
-            FROM product_items
-            WHERE source = ?
-            ORDER BY updated_at DESC, id DESC
-            LIMIT ?
-            """,
-            (source, limit),
-        ).fetchall()
+    with SessionLocal() as session:
+        stmt = (
+            select(ProductItem)
+            .where(ProductItem.source == source)
+            .order_by(ProductItem.updated_at.desc(), ProductItem.id.desc())
+            .limit(limit)
+        )
+        rows = session.scalars(stmt).all()
 
     result: List[Dict[str, Any]] = []
     for row in rows:
         result.append(
             {
-                "id": row["id"],
-                "external_key": row["external_key"],
-                "sku": row["sku"],
-                "title": row["title"],
-                "brand": row["brand"],
+                "id": row.id,
+                "external_key": row.external_key,
+                "sku": row.sku,
+                "title": row.title,
+                "brand": row.brand,
             }
         )
     return result

@@ -10,7 +10,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
 from app_layout import APP_PAGES, initialize_page
-from db import SessionLocal, get_database_url
+from demowb.db import SessionLocal, get_database_url
 from models import Product, ProductImportLog
 
 initialize_page(

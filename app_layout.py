@@ -8,7 +8,7 @@ import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy.engine import make_url
 
-from db import get_database_url, init_db
+from demowb.db import get_database_url, init_db
 
 logger = logging.getLogger(__name__)
 
