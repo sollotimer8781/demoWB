@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 APP_PAGES = [
     {"path": "streamlit_app.py", "label": "Главная", "icon": "🏠"},
     {"path": "pages/1_Products.py", "label": "Каталог товаров", "icon": "📦"},
+    {"path": "pages/2_Profit_Calculator.py", "label": "Калькулятор рентабельности", "icon": "🧮"},
     {"path": "pages/2_OZON_Products.py", "label": "Ozon", "icon": "🛒"},
     {"path": "pages/WB_Products.py", "label": "Wildberries", "icon": "🟣"},
     {"path": "pages/SBIS_Products.py", "label": "SBIS", "icon": "📄"},

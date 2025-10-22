@@ -34,7 +34,10 @@ def _get_database_url_from_streamlit() -> Optional[str]:
         return None
 
     for key in ("DATABASE_URL", "database_url"):
-        value = secrets.get(key)  # type: ignore[call-arg]
+        try:
+            value = secrets.get(key)  # type: ignore[call-arg]
+        except Exception:  # pragma: no cover - secrets may be unavailable entirely
+            continue
         if value:
             return str(value)
     return None
