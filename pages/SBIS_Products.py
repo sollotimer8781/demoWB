@@ -8,9 +8,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy import select
 
 from app_layout import initialize_page
-from product_repository import ensure_schema, get_connection, load_products_df, upsert_products
+from demowb.db import SessionLocal
+from models import ProductItem
+from product_repository import load_products_df, upsert_products
 
 
 initialize_page(
@@ -204,20 +207,29 @@ def _prepare_records(
 def _simulate_upsert(records: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
     if not records:
         return 0, 0
-    with get_connection() as conn:
-        ensure_schema(conn)
-        cursor = conn.cursor()
-        inserted = 0
-        updated = 0
+
+    inserted = 0
+    updated = 0
+    with SessionLocal() as session:
         for item in records:
-            row = cursor.execute(
-                "SELECT 1 FROM product_items WHERE source = ? AND external_key = ? AND external_key_type = ?",
-                (item["source"], item["external_key"], item["external_key_type"]),
-            ).fetchone()
-            if row:
-                updated += 1
-            else:
+            source = item.get("source")
+            external_key = item.get("external_key")
+            external_key_type = item.get("external_key_type")
+            if not (source and external_key and external_key_type):
+                continue
+            existing = session.execute(
+                select(ProductItem.id)
+                .where(
+                    ProductItem.source == source,
+                    ProductItem.external_key == external_key,
+                    ProductItem.external_key_type == external_key_type,
+                )
+                .limit(1)
+            ).scalar_one_or_none()
+            if existing is None:
                 inserted += 1
+            else:
+                updated += 1
     return inserted, updated
 
 

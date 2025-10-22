@@ -10,7 +10,7 @@ from sqlalchemy import engine_from_config, pool
 # Ensure project root is on the path for module imports
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from db import Base, get_database_url  # noqa: E402
+from demowb.db import Base, get_database_url  # noqa: E402
 
 config = context.config
 

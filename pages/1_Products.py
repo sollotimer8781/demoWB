@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import io
+import json
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 
 from app_layout import initialize_page
-from db import SessionLocal
+from demowb.db import SessionLocal
 from models import Product
 from product_service import (
     CUSTOM_PREFIX,
@@ -121,6 +122,75 @@ def _ensure_session_defaults(all_custom_fields: List[str]) -> None:
     st.session_state["products_all_custom_fields"] = merged_all
 
 
+def _normalize_custom_cell(value: object) -> object:
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return ""
+    except Exception:
+        pass
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set)):
+        try:
+            return json.dumps(value, ensure_ascii=False)
+        except Exception:  # noqa: BLE001
+            return str(value)
+    return value
+
+
+def _coerce_active(value: object) -> bool:
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return True
+    except Exception:
+        pass
+    if value is None:
+        return True
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if not text:
+            return True
+        if text in {"0", "false", "no", "n", "off", "нет"}:
+            return False
+        if text in {"1", "true", "yes", "y", "on", "да"}:
+            return True
+    return bool(value)
+
+
+def _prepare_editor_dataframe(df: pd.DataFrame, custom_fields: Sequence[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
+    prepared = df.copy()
+
+    for column in ("id", "nm_id"):
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce").astype("Int64")
+
+    if "stock" in prepared.columns:
+        prepared["stock"] = pd.to_numeric(prepared["stock"], errors="coerce").astype("Int64")
+    if "price" in prepared.columns:
+        prepared["price"] = pd.to_numeric(prepared["price"], errors="coerce")
+
+    if "is_active" in prepared.columns:
+        prepared["is_active"] = prepared["is_active"].apply(_coerce_active).astype(bool)
+
+    for column in ("sku", "title", "brand", "category", "barcode"):
+        if column in prepared.columns:
+            prepared[column] = prepared[column].astype("string").fillna("")
+
+    for column in ("created_at", "updated_at"):
+        if column in prepared.columns:
+            prepared[column] = pd.to_datetime(prepared[column], errors="coerce")
+
+    for custom_key in custom_fields:
+        column_name = f"{CUSTOM_PREFIX}{custom_key}"
+        if column_name in prepared.columns:
+            prepared[column_name] = prepared[column_name].apply(_normalize_custom_cell)
+
+    return prepared
+
+
 initialize_page(
     page_title="Управление товарами",
     page_icon="📦",
@@ -216,6 +286,7 @@ visible_custom_fields = st.session_state["products_visible_custom_fields"]
 with SessionLocal() as session:
     products_df, _ = load_products_dataframe(session, filters, visible_custom_fields)
 
+products_df = _prepare_editor_dataframe(products_df, visible_custom_fields)
 selection_count = len(products_df)
 
 catalog_tab, import_tab, export_tab, logs_tab = st.tabs([
@@ -255,8 +326,8 @@ with catalog_tab:
             "stock": st.column_config.NumberColumn("Остаток", step=1, help="Количество на складе"),
             "barcode": st.column_config.TextColumn("Штрихкод"),
             "is_active": st.column_config.CheckboxColumn("Активен"),
-            "created_at": st.column_config.TextColumn("Создано", disabled=True),
-            "updated_at": st.column_config.TextColumn("Обновлено", disabled=True),
+            "created_at": st.column_config.DatetimeColumn("Создано", disabled=True, format="YYYY-MM-DD HH:mm"),
+            "updated_at": st.column_config.DatetimeColumn("Обновлено", disabled=True, format="YYYY-MM-DD HH:mm"),
         }
         for custom_key in visible_custom_fields:
             column_name = f"{CUSTOM_PREFIX}{custom_key}"

@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import pandas as pd
 import streamlit as st
+from sqlalchemy.exc import SQLAlchemyError
 
 from app_layout import initialize_page
 from data_workspace_repository import (
@@ -20,6 +21,7 @@ from data_workspace_repository import (
     list_sources,
     replace_all_coefficients,
 )
+from demowb.db import init_db
 from product_repository import load_products_df
 
 initialize_page(
@@ -169,6 +171,10 @@ def load_coefficients_table() -> pd.DataFrame:
         df["unit"] = df["unit"].fillna("")
     if "extra" in df.columns:
         df["extra"] = df["extra"].fillna("")
+    if "value" in df.columns:
+        numeric_mask = df["value_type"] == "NUMBER"
+        df.loc[numeric_mask, "value"] = pd.to_numeric(df.loc[numeric_mask, "value"], errors="coerce")
+        df.loc[~numeric_mask, "value"] = df.loc[~numeric_mask, "value"].fillna("")
     if "updated_at" in df.columns:
         df["updated_at"] = pd.to_datetime(df["updated_at"], errors="coerce")
     return df

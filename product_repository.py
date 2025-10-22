@@ -1,75 +1,15 @@
+from __future__ import annotations
+
 import json
-import sqlite3
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-DB_PATH = "/home/engine/project/sqlite.db"
-TABLE_NAME = "product_items"
+import pandas as pd
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-
-def get_connection() -> sqlite3.Connection:
-    return sqlite3.connect(DB_PATH)
-
-
-def _ensure_columns(conn: sqlite3.Connection, table: str, required: Dict[str, str]) -> None:
-    existing_columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    for column, ddl in required.items():
-        if column not in existing_columns:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
-
-
-def ensure_schema(conn: sqlite3.Connection) -> None:
-    conn.execute(
-        f"""
-        CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,
-            external_key TEXT NOT NULL,
-            external_key_type TEXT NOT NULL,
-            product_id TEXT,
-            offer_id TEXT,
-            sku TEXT,
-            nm_id INTEGER,
-            title TEXT,
-            brand TEXT,
-            price REAL,
-            stock INTEGER,
-            image_urls TEXT,
-            extra TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(source, external_key, external_key_type)
-        )
-        """
-    )
-    _ensure_columns(
-        conn,
-        TABLE_NAME,
-        {
-            "product_id": "TEXT",
-            "offer_id": "TEXT",
-            "sku": "TEXT",
-            "nm_id": "INTEGER",
-            "image_urls": "TEXT",
-            "extra": "TEXT",
-        },
-    )
-    conn.execute(
-        f"""
-        CREATE TRIGGER IF NOT EXISTS {TABLE_NAME}_updated_at_trigger
-        AFTER UPDATE ON {TABLE_NAME}
-        FOR EACH ROW
-        BEGIN
-            UPDATE {TABLE_NAME} SET updated_at = CURRENT_TIMESTAMP WHERE id = OLD.id;
-        END;
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_{TABLE_NAME}_source_key
-        ON {TABLE_NAME} (source, external_key, external_key_type)
-        """
-    )
-    conn.commit()
+from demowb.db import SessionLocal, session_scope
+from models import ProductItem
 
 
 def _as_text(value: Any) -> Optional[str]:
@@ -91,10 +31,12 @@ def _as_int(value: Any) -> Optional[int]:
         return None
     if isinstance(value, bool):
         return int(value)
-    if isinstance(value, (int,)):
-        return int(value)
-    if isinstance(value, float) and value.is_integer():
-        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer():
+            return int(value)
+        return None
     if isinstance(value, str):
         stripped = value.strip()
         if not stripped:
@@ -126,205 +68,201 @@ def _as_float(value: Any) -> Optional[float]:
 def _ensure_list_of_strings(value: Any) -> List[str]:
     if not value:
         return []
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+            if isinstance(decoded, list):
+                value = decoded
+        except Exception:
+            value = [value]
+    if not isinstance(value, (list, tuple, set)):
+        value = [value]
     result: List[str] = []
-    if isinstance(value, (list, tuple, set)):
-        iterable = value
-    else:
-        iterable = [value]
-    for item in iterable:
+    for item in value:
         if item is None:
             continue
         if isinstance(item, str):
             text = item.strip()
-            if text:
-                result.append(text)
         else:
             try:
                 text = str(item)
             except Exception:
                 continue
             text = text.strip()
-            if text:
-                result.append(text)
+        if text:
+            result.append(text)
     return result
 
 
 def _ensure_json_object(value: Any) -> Dict[str, Any]:
     if isinstance(value, dict):
-        return value
+        return dict(value)
     if value is None:
         return {}
+    if isinstance(value, (list, tuple)):
+        try:
+            json.dumps(value)
+        except TypeError:
+            return {"value": list(value)}
+        return {"value": list(value)}
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return {"value": text}
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            return {"value": parsed}
+        return {"value": parsed}
     try:
         json.dumps(value)
         return value  # type: ignore[return-value]
-    except Exception:
+    except TypeError:
         return {"value": str(value)}
+
+
+def _normalize_payload(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    source = _as_text(item.get("source"))
+    external_key = _as_text(item.get("external_key"))
+    external_key_type = _as_text(item.get("external_key_type"))
+    if not source or not external_key or not external_key_type:
+        return None
+
+    payload: Dict[str, Any] = {
+        "source": source,
+        "external_key": external_key,
+        "external_key_type": external_key_type,
+        "product_id": _as_text(item.get("product_id")),
+        "offer_id": _as_text(item.get("offer_id")),
+        "sku": _as_text(item.get("sku")),
+        "nm_id": _as_int(item.get("nm_id")),
+        "title": _as_text(item.get("title")),
+        "brand": _as_text(item.get("brand")),
+        "price": _as_float(item.get("price")),
+        "stock": _as_int(item.get("stock")),
+        "image_urls": _ensure_list_of_strings(item.get("image_urls")),
+        "extra": _ensure_json_object(item.get("extra")),
+    }
+    return payload
+
+
+def _fetch_existing(session: Session, payload: Dict[str, Any]) -> Optional[ProductItem]:
+    stmt = (
+        select(ProductItem)
+        .where(
+            ProductItem.source == payload["source"],
+            ProductItem.external_key == payload["external_key"],
+            ProductItem.external_key_type == payload["external_key_type"],
+        )
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
+def _apply_payload(model: ProductItem, payload: Dict[str, Any], *, timestamp: datetime) -> None:
+    model.product_id = payload["product_id"]
+    model.offer_id = payload["offer_id"]
+    model.sku = payload["sku"]
+    model.nm_id = payload["nm_id"]
+    model.title = payload["title"]
+    model.brand = payload["brand"]
+    model.price = payload["price"]
+    model.stock = payload["stock"]
+    model.image_urls = payload["image_urls"] or []
+    model.extra = payload["extra"] or {}
+    model.updated_at = timestamp
 
 
 def upsert_products(items: Iterable[Dict[str, Any]]) -> Tuple[int, int]:
     inserted = 0
     updated = 0
-    with get_connection() as conn:
-        ensure_schema(conn)
-        for item in items:
-            source = _as_text(item.get("source"))
-            external_key = _as_text(item.get("external_key"))
-            external_key_type = _as_text(item.get("external_key_type"))
-            if not source or not external_key or not external_key_type:
-                continue
+    now = datetime.utcnow()
 
-            product_id = _as_text(item.get("product_id"))
-            offer_id = _as_text(item.get("offer_id"))
-            sku = _as_text(item.get("sku"))
-            nm_id = _as_int(item.get("nm_id"))
-            title = item.get("title")
-            if title is not None:
-                title = str(title)
-            brand = item.get("brand")
-            if brand is not None:
-                brand = str(brand)
-            price = _as_float(item.get("price"))
-            stock = _as_int(item.get("stock"))
-            image_urls = json.dumps(_ensure_list_of_strings(item.get("image_urls")))
-            extra = json.dumps(_ensure_json_object(item.get("extra")))
+    normalized_items = [_normalize_payload(item) for item in items]
+    normalized_items = [item for item in normalized_items if item is not None]
+    if not normalized_items:
+        return inserted, updated
 
-            existing = conn.execute(
-                f"SELECT id FROM {TABLE_NAME} WHERE source = ? AND external_key = ? AND external_key_type = ?",
-                (source, external_key, external_key_type),
-            ).fetchone()
-
-            if existing:
-                conn.execute(
-                    f"""
-                    UPDATE {TABLE_NAME}
-                    SET
-                        product_id = ?,
-                        offer_id = ?,
-                        sku = ?,
-                        nm_id = ?,
-                        title = ?,
-                        brand = ?,
-                        price = ?,
-                        stock = ?,
-                        image_urls = ?,
-                        extra = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        product_id,
-                        offer_id,
-                        sku,
-                        nm_id,
-                        title,
-                        brand,
-                        price,
-                        stock,
-                        image_urls,
-                        extra,
-                        existing[0],
-                    ),
-                )
-                updated += 1
-            else:
-                conn.execute(
-                    f"""
-                    INSERT INTO {TABLE_NAME} (
-                        source,
-                        external_key,
-                        external_key_type,
-                        product_id,
-                        offer_id,
-                        sku,
-                        nm_id,
-                        title,
-                        brand,
-                        price,
-                        stock,
-                        image_urls,
-                        extra
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        source,
-                        external_key,
-                        external_key_type,
-                        product_id,
-                        offer_id,
-                        sku,
-                        nm_id,
-                        title,
-                        brand,
-                        price,
-                        stock,
-                        image_urls,
-                        extra,
-                    ),
-                )
+    with session_scope() as session:
+        for payload in normalized_items:
+            assert payload is not None
+            existing = _fetch_existing(session, payload)
+            if existing is None:
+                new_item = ProductItem(**payload, created_at=now, updated_at=now)
+                session.add(new_item)
                 inserted += 1
-        conn.commit()
+            else:
+                _apply_payload(existing, payload, timestamp=now)
+                updated += 1
     return inserted, updated
 
 
-def _parse_json(value: Any, default: Any) -> Any:
-    if value is None:
-        return default
-    if isinstance(value, (dict, list)):
+def _coerce_extra(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
         return value
     if isinstance(value, str):
         try:
-            return json.loads(value)
+            parsed = json.loads(value)
+            if isinstance(parsed, dict):
+                return parsed
         except Exception:
-            return default
-    return default
+            return {}
+    return {}
 
 
-def load_products_df(source: str):
-    import pandas as pd
+def load_products_df(source: str) -> pd.DataFrame:
+    with SessionLocal() as session:
+        stmt = (
+            select(ProductItem)
+            .where(ProductItem.source == source)
+            .order_by(ProductItem.updated_at.desc(), ProductItem.id.desc())
+        )
+        items = session.scalars(stmt).all()
 
-    with get_connection() as conn:
-        ensure_schema(conn)
-        df = pd.read_sql(
-            f"""
-            SELECT
-                id,
-                source,
-                external_key,
-                external_key_type,
-                product_id,
-                offer_id,
-                sku,
-                nm_id,
-                title,
-                brand,
-                price,
-                stock,
-                image_urls,
-                extra,
-                created_at,
-                updated_at
-            FROM {TABLE_NAME}
-            WHERE source = ?
-            ORDER BY updated_at DESC, id DESC
-            """,
-            conn,
-            params=(source,),
+    rows: List[Dict[str, Any]] = []
+    for item in items:
+        rows.append(
+            {
+                "id": item.id,
+                "source": item.source,
+                "external_key": item.external_key,
+                "external_key_type": item.external_key_type,
+                "product_id": item.product_id,
+                "offer_id": item.offer_id,
+                "sku": item.sku,
+                "nm_id": item.nm_id,
+                "title": item.title,
+                "brand": item.brand,
+                "price": item.price,
+                "stock": item.stock,
+                "image_urls": item.image_urls or [],
+                "extra": item.extra or {},
+                "created_at": item.created_at.isoformat() if item.created_at else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            }
         )
 
+    df = pd.DataFrame(rows)
     if df.empty:
         return df
 
-    df["image_urls"] = df["image_urls"].apply(lambda v: _parse_json(v, []))
-    df["extra"] = df["extra"].apply(lambda v: _parse_json(v, {}))
     df["price"] = pd.to_numeric(df["price"], errors="coerce")
-    df["stock"] = pd.to_numeric(df["stock"], errors="coerce")
-
+    if "stock" in df.columns:
+        df["stock"] = pd.to_numeric(df["stock"], errors="coerce")
     if "nm_id" in df.columns:
         df["nm_id"] = pd.to_numeric(df["nm_id"], errors="coerce").astype("Int64")
 
-    for col in ("product_id", "offer_id", "sku", "external_key"):
-        if col in df.columns:
-            df[col] = df[col].apply(
-                lambda v: None if v is None or pd.isna(v) else str(v).strip()
-            )
+    if "image_urls" in df.columns:
+        df["image_urls"] = df["image_urls"].apply(_ensure_list_of_strings)
+    if "extra" in df.columns:
+        df["extra"] = df["extra"].apply(_coerce_extra)
+
+    for column in ("product_id", "offer_id", "sku", "external_key"):
+        if column in df.columns:
+            df[column] = df[column].apply(_as_text)
 
     return df
