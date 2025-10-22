@@ -97,6 +97,44 @@ WB_API_TOKEN = "your_wb_api_token"
 | `pages/SBIS_Products.py` | Импорт ассортимента SBIS из файлов | `product_items` (SQLite) | — |
 | `pages/Data_Workspace.py` | Коэффициенты, аналитика и массовые правки | `product_items` (SQLite) | — |
 
+## Поля каталога продуктов
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `sku` | string | Внутренний артикул карточки. |
+| `seller_sku` | string | Артикул продавца из внешних систем. |
+| `wb_sku` | string | Артикул Wildberries/маркетплейса. |
+| `nm_id` | number | Внутренний идентификатор (NM ID). |
+| `title` | string | Название товара (обязательное поле). |
+| `brand` | string | Бренд. |
+| `category` | string | Категория/подкатегория. |
+| `price_src` | number | Цена на витрине (до скидок). |
+| `seller_discount_pct` | number | Скидка продавца, % (0–100). |
+| `price` | number (read-only) | Итоговая цена для совместимости. Пересчитывается на основе `price_src` и скидки. |
+| `stock` | number | Общий остаток. Если не указан, вычисляется как сумма `stock_wb` + `stock_seller`. |
+| `stock_wb` | number | Остаток на складах маркетплейса. |
+| `stock_seller` | number | Остаток на собственном складе. |
+| `turnover_days` | number | Оборачиваемость, дни. |
+| `product_cost` | number | Себестоимость единицы. |
+| `shipping_cost` | number | Доставка до склада маркетплейса. |
+| `logistics_back_cost` | number | Ожидаемые затраты на возвраты. |
+| `warehouse_coeff` | number | Дополнительный коэффициент/стоимость склада. |
+| `weight_kg` | number | Вес с упаковкой, кг. |
+| `package_l_cm` / `package_w_cm` / `package_h_cm` | number | Габариты упаковки, см. |
+| `volume_l` | number | Объём, л. Если не заполнено — вычисляется из габаритов. |
+| `barcode` | string | Штрихкод. |
+| `comments` | string | Свободный комментарий. |
+| `custom_data` | JSON | Произвольные данные. Ключи `commission_pct` и `tax_pct` используются для расчётов комиссии и налога. |
+| `price_final` | number (read-only) | Итоговая цена со скидкой. |
+| `commission` | number (read-only) | Комиссия маркетплейса в валюте. |
+| `tax` | number (read-only) | Налог, рассчитанный по ставке `tax_pct`. |
+| `margin` | number (read-only) | Маржа в валюте. |
+| `margin_percent` | number (read-only) | Маржа к себестоимости, %. |
+
+> Колонки `price_final`, `commission`, `tax`, `margin`, `margin_percent` рассчитываются автоматически и доступны только для чтения. Чтобы они отображались корректно, заполните `price_src`, `seller_discount_pct`, а также стоимости (`product_cost`, `shipping_cost`, `warehouse_coeff`, `logistics_back_cost`) и при необходимости задайте ставки комиссий/налогов через `custom_data`.
+>
+> Импорт CSV/XLSX распознаёт типовые русские заголовки колонок («Артикул продавца», «Артикул WB», «Текущая цена», «Скидка», «Остатки WB», «литраж» и т.д.) и автоматически сопоставляет их полям каталога. Итоговая цена со скидкой (`price_final`) при импорте рассчитывается на основе `price_src` и `seller_discount_pct` (либо берётся из колонки «Текущая цена со скид.»).
+
 ## Миграции и база данных
 
 - Модуль `db.py` подхватывает `DATABASE_URL`, создаёт `engine` и `SessionLocal`. Для SQLite автоматически создаётся файл `db.sqlite3` в корне репозитория.

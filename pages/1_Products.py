@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence, Set
 
 import pandas as pd
 import streamlit as st
@@ -15,10 +15,12 @@ from product_service import (
     CUSTOM_PREFIX,
     CustomFieldDefinition,
     ProductFilters,
+    available_aliases,
     bulk_update_field,
     export_products_dataframe,
     fetch_import_logs,
     get_available_brands,
+    guess_import_column,
     import_products_from_dataframe,
     load_custom_field_definitions,
     load_products_dataframe,
@@ -31,42 +33,99 @@ from sync import sync_products
 TEMPLATE_SAMPLE_ROWS = [
     {
         "sku": "WB-10001",
+        "seller_sku": "SELLER-10001",
+        "wb_sku": "WB-10001-01",
         "nm_id": 10001,
         "title": "Футболка мужская базовая",
         "brand": "MockWear",
         "category": "Одежда",
-        "price": 1299.0,
+        "price_src": 1299.0,
+        "seller_discount_pct": 10.0,
+        "price": 1169.1,
+        "price_final": 1169.1,
         "stock": 45,
+        "stock_wb": 30,
+        "stock_seller": 15,
         "barcode": "1112223334445",
         "is_active": True,
+        "product_cost": 620.0,
+        "shipping_cost": 45.0,
+        "logistics_back_cost": 20.0,
+        "warehouse_coeff": 35.0,
+        "turnover_days": 12.0,
+        "weight_kg": 0.35,
+        "package_l_cm": 34.0,
+        "package_w_cm": 24.0,
+        "package_h_cm": 4.0,
+        "volume_l": 3.264,
+        "comments": "Базовая позиция",
+        "custom_data": {"commission_pct": 15, "tax_pct": 6},
         "color": "Черный",
         "size": "M",
         "season": "SS24",
     },
     {
         "sku": "WB-10002",
+        "seller_sku": "SELLER-10002",
+        "wb_sku": "WB-10002-01",
         "nm_id": 10002,
         "title": "Худи оверсайз женское",
         "brand": "MockWear",
         "category": "Одежда",
-        "price": 2499.0,
+        "price_src": 2499.0,
+        "seller_discount_pct": 15.0,
+        "price": 2124.15,
+        "price_final": 2124.15,
         "stock": 30,
+        "stock_wb": 18,
+        "stock_seller": 12,
         "barcode": "1112223334446",
         "is_active": True,
+        "product_cost": 980.0,
+        "shipping_cost": 65.0,
+        "logistics_back_cost": 28.0,
+        "warehouse_coeff": 42.0,
+        "turnover_days": 18.0,
+        "weight_kg": 0.58,
+        "package_l_cm": 40.0,
+        "package_w_cm": 28.0,
+        "package_h_cm": 8.0,
+        "volume_l": 8.96,
+        "comments": "Сезонная коллекция",
+        "custom_data": {"commission_pct": 18, "tax_pct": 6},
         "color": "Лавандовый",
         "size": "S",
         "season": "AW24",
     },
     {
         "sku": "WB-10003",
+        "seller_sku": "SELLER-10003",
+        "wb_sku": "WB-10003-01",
         "nm_id": 10003,
         "title": "Рюкзак городской",
         "brand": "Urban Mock",
         "category": "Аксессуары",
-        "price": 1899.0,
+        "price_src": 1899.0,
+        "seller_discount_pct": 12.0,
+        "price": 1671.12,
+        "price_final": 1671.12,
         "stock": 18,
+        "stock_wb": 10,
+        "stock_seller": 8,
         "barcode": "1112223334447",
         "is_active": True,
+        "product_cost": 780.0,
+        "shipping_cost": 55.0,
+        "logistics_back_cost": 25.0,
+        "warehouse_coeff": 38.0,
+        "turnover_days": 21.0,
+        "weight_kg": 0.74,
+        "package_l_cm": 45.0,
+        "package_w_cm": 32.0,
+        "package_h_cm": 12.0,
+        "volume_l": 17.28,
+        "comments": "Влагостойкий материал",
+        "custom_data": {"commission_pct": 17, "tax_pct": 6},
         "color": "Графит",
         "capacity_l": 18,
     },
@@ -156,12 +215,42 @@ def _prepare_editor_dataframe(
     if "price" in prepared.columns:
         prepared["price"] = pd.to_numeric(prepared["price"], errors="coerce")
 
+    numeric_float_columns = [
+        "price_src",
+        "seller_discount_pct",
+        "price_final",
+        "product_cost",
+        "shipping_cost",
+        "logistics_back_cost",
+        "warehouse_coeff",
+        "turnover_days",
+        "weight_kg",
+        "package_l_cm",
+        "package_w_cm",
+        "package_h_cm",
+        "volume_l",
+        "commission",
+        "tax",
+        "margin",
+        "margin_percent",
+    ]
+    for column in numeric_float_columns:
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+
+    for column in ("stock_wb", "stock_seller"):
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce").astype("Int64")
+
     if "is_active" in prepared.columns:
         prepared["is_active"] = prepared["is_active"].apply(_coerce_active).astype(bool)
 
-    for column in ("sku", "title", "brand", "category", "barcode"):
+    for column in ("sku", "seller_sku", "wb_sku", "title", "brand", "category", "barcode", "comments"):
         if column in prepared.columns:
             prepared[column] = prepared[column].astype("string").fillna("")
+
+    if "custom_data" in prepared.columns:
+        prepared["custom_data"] = prepared["custom_data"].astype("string").fillna("{}")
 
     for column in ("created_at", "updated_at"):
         if column in prepared.columns:
@@ -323,13 +412,41 @@ with catalog_tab:
         column_config = {
             "id": st.column_config.NumberColumn("ID", disabled=True),
             "sku": st.column_config.TextColumn("SKU"),
+            "seller_sku": st.column_config.TextColumn("Артикул продавца"),
+            "wb_sku": st.column_config.TextColumn("Артикул WB"),
             "nm_id": st.column_config.NumberColumn("NM ID", step=1),
             "title": st.column_config.TextColumn("Название"),
             "brand": st.column_config.TextColumn("Бренд"),
             "category": st.column_config.TextColumn("Категория"),
-            "price": st.column_config.NumberColumn("Цена", format="%.2f", step=0.5, help="Цена в рублях"),
+            "price_src": st.column_config.NumberColumn("Цена на витрине", format="%.2f ₽", step=1.0),
+            "seller_discount_pct": st.column_config.NumberColumn("Скидка продавца, %", format="%.2f %", step=0.5),
+            "price": st.column_config.NumberColumn(
+                "Итоговая цена",
+                format="%.2f ₽",
+                disabled=True,
+                help="Рассчитывается из цены на витрине и скидки",
+            ),
+            "price_final": st.column_config.NumberColumn("Цена со скидкой", format="%.2f ₽", disabled=True),
             "stock": st.column_config.NumberColumn("Остаток", step=1, help="Количество на складе"),
+            "stock_wb": st.column_config.NumberColumn("Остаток WB", step=1),
+            "stock_seller": st.column_config.NumberColumn("Остаток продавца", step=1),
+            "turnover_days": st.column_config.NumberColumn("Оборачиваемость, дни", format="%.1f"),
+            "product_cost": st.column_config.NumberColumn("Себестоимость", format="%.2f ₽", step=1.0),
+            "shipping_cost": st.column_config.NumberColumn("Доставка до склада", format="%.2f ₽", step=1.0),
+            "logistics_back_cost": st.column_config.NumberColumn("Логистика возврата", format="%.2f ₽", step=1.0),
+            "warehouse_coeff": st.column_config.NumberColumn("Коэфф. склада", format="%.2f ₽", step=1.0),
+            "commission": st.column_config.NumberColumn("Комиссия", format="%.2f ₽", disabled=True),
+            "tax": st.column_config.NumberColumn("Налог", format="%.2f ₽", disabled=True),
+            "margin": st.column_config.NumberColumn("Маржа", format="%.2f ₽", disabled=True),
+            "margin_percent": st.column_config.NumberColumn("Маржа, %", format="%.2f %", disabled=True),
+            "weight_kg": st.column_config.NumberColumn("Вес, кг", format="%.3f", step=0.01),
+            "package_l_cm": st.column_config.NumberColumn("Длина упаковки, см", format="%.1f", step=0.5),
+            "package_w_cm": st.column_config.NumberColumn("Ширина упаковки, см", format="%.1f", step=0.5),
+            "package_h_cm": st.column_config.NumberColumn("Высота упаковки, см", format="%.1f", step=0.5),
+            "volume_l": st.column_config.NumberColumn("Объём, л", format="%.3f", step=0.1),
             "barcode": st.column_config.TextColumn("Штрихкод"),
+            "comments": st.column_config.TextColumn("Комментарии"),
+            "custom_data": st.column_config.CodeColumn("custom_data (JSON)", language="json"),
             "is_active": st.column_config.CheckboxColumn("Активен"),
             "created_at": st.column_config.DatetimeColumn("Создано", disabled=True, format="YYYY-MM-DD HH:mm"),
             "updated_at": st.column_config.DatetimeColumn("Обновлено", disabled=True, format="YYYY-MM-DD HH:mm"),
@@ -385,11 +502,27 @@ with catalog_tab:
                 "title": "Название",
                 "brand": "Бренд",
                 "category": "Категория",
-                "price": "Цена",
-                "stock": "Остаток",
+                "price_src": "Цена на витрине",
+                "seller_discount_pct": "Скидка продавца, %",
+                "product_cost": "Себестоимость",
+                "shipping_cost": "Доставка до склада",
+                "logistics_back_cost": "Логистика возврата",
+                "warehouse_coeff": "Коэфф. склада",
+                "stock": "Остаток общий",
+                "stock_wb": "Остаток WB",
+                "stock_seller": "Остаток продавца",
+                "turnover_days": "Оборачиваемость, дни",
+                "weight_kg": "Вес, кг",
+                "package_l_cm": "Длина упаковки, см",
+                "package_w_cm": "Ширина упаковки, см",
+                "package_h_cm": "Высота упаковки, см",
+                "volume_l": "Объём, л",
                 "barcode": "Штрихкод",
+                "comments": "Комментарии",
                 "is_active": "Активен",
                 "sku": "SKU",
+                "seller_sku": "Артикул продавца",
+                "wb_sku": "Артикул WB",
                 "nm_id": "NM ID",
             }
             custom_labels = {
@@ -447,20 +580,44 @@ with catalog_tab:
                         value="",
                         key=f"products_bulk_custom_text_{field_name}",
                     )
-            elif field_name == "price":
+            elif field_name in {"price_src", "product_cost", "shipping_cost", "logistics_back_cost", "warehouse_coeff"}:
+                value_to_apply = st.number_input(
+                    "Введите значение",
+                    value=0.0,
+                    step=1.0,
+                    format="%.2f",
+                    key=f"products_bulk_currency_{field_name}",
+                )
+            elif field_name in {"seller_discount_pct"}:
                 value_to_apply = st.number_input(
                     "Введите значение",
                     value=0.0,
                     step=0.5,
                     format="%.2f",
-                    key="products_bulk_price_value",
+                    key=f"products_bulk_percent_{field_name}",
                 )
-            elif field_name == "stock":
+            elif field_name in {"turnover_days", "package_l_cm", "package_w_cm", "package_h_cm"}:
+                value_to_apply = st.number_input(
+                    "Введите значение",
+                    value=0.0,
+                    step=0.5,
+                    format="%.1f",
+                    key=f"products_bulk_float_{field_name}",
+                )
+            elif field_name in {"weight_kg", "volume_l"}:
+                value_to_apply = st.number_input(
+                    "Введите значение",
+                    value=0.0,
+                    step=0.1,
+                    format="%.3f",
+                    key=f"products_bulk_precision_{field_name}",
+                )
+            elif field_name in {"stock", "stock_wb", "stock_seller", "nm_id"}:
                 value_to_apply = st.number_input(
                     "Введите значение",
                     value=0,
                     step=1,
-                    key="products_bulk_stock_value",
+                    key=f"products_bulk_int_{field_name}",
                 )
             elif field_name == "is_active":
                 value_to_apply = st.selectbox(
@@ -468,6 +625,12 @@ with catalog_tab:
                     options=[True, False],
                     format_func=lambda v: "Активен" if v else "Скрыт",
                     key="products_bulk_active_value",
+                )
+            elif field_name == "comments":
+                value_to_apply = st.text_area(
+                    "Введите значение",
+                    value="",
+                    key="products_bulk_comments_value",
                 )
             else:
                 value_to_apply = st.text_input(
@@ -561,32 +724,61 @@ with import_tab:
             )
 
             field_mapping: Dict[str, Optional[str]] = {}
+            used_columns: Set[str] = set()
+            if key_column in columns:
+                used_columns.add(key_column)
             field_labels = [
+                ("sku", "SKU"),
+                ("seller_sku", "Артикул продавца"),
+                ("wb_sku", "Артикул WB"),
+                ("nm_id", "NM ID"),
                 ("title", "Название *"),
                 ("brand", "Бренд"),
                 ("category", "Категория"),
-                ("price", "Цена"),
-                ("stock", "Остаток"),
+                ("price_src", "Цена на витрине"),
+                ("seller_discount_pct", "Скидка продавца, %"),
+                ("price", "Цена (legacy)"),
+                ("price_final", "Цена со скидкой (расчет)"),
+                ("product_cost", "Себестоимость"),
+                ("shipping_cost", "Доставка до склада"),
+                ("logistics_back_cost", "Логистика возврата"),
+                ("warehouse_coeff", "Коэфф. склада"),
+                ("stock", "Остаток общий"),
+                ("stock_wb", "Остаток WB"),
+                ("stock_seller", "Остаток продавца"),
+                ("turnover_days", "Оборачиваемость, дни"),
+                ("weight_kg", "Вес, кг"),
+                ("package_l_cm", "Длина упаковки, см"),
+                ("package_w_cm", "Ширина упаковки, см"),
+                ("package_h_cm", "Высота упаковки, см"),
+                ("volume_l", "Объём, л"),
                 ("barcode", "Штрихкод"),
+                ("comments", "Комментарии"),
                 ("is_active", "Активен"),
-                ("sku", "SKU"),
-                ("nm_id", "NM ID"),
+                ("custom_data", "Доп. данные (JSON)"),
             ]
             for field, label in field_labels:
                 options = [sentinel] + columns
-                default_value = None
+                default_value: Optional[str] = None
                 if field == key_target:
                     default_value = key_column
-                elif field in columns:
-                    default_value = field
+                else:
+                    guessed = guess_import_column(field, columns)
+                    if guessed and guessed not in used_columns:
+                        default_value = guessed
                 default_index = options.index(default_value) if default_value in options else 0
                 selected_column = st.selectbox(
                     label,
                     options=options,
                     index=default_index,
                     key=f"products_import_map_{field}",
+                    help="Варианты: " + ", ".join(available_aliases(field)),
                 )
-                field_mapping[field] = None if selected_column == sentinel else selected_column
+                if selected_column == sentinel:
+                    field_mapping[field] = None
+                else:
+                    field_mapping[field] = selected_column
+                    used_columns.add(selected_column)
 
             field_mapping[key_target] = key_column
             mapped_columns = {column for column in field_mapping.values() if column}
