@@ -140,6 +140,7 @@ def sync_products(*, use_mock: bool = True) -> Tuple[int, int]:
                     barcode=barcode,
                     image_urls=image_urls,
                     custom_fields=custom_fields,
+                    custom_data=custom_fields,
                     is_active=True,
                     created_at=now,
                     updated_at=now,
@@ -156,8 +157,10 @@ def sync_products(*, use_mock: bool = True) -> Tuple[int, int]:
                 product.barcode = barcode
                 product.image_urls = image_urls
                 existing_custom = dict(product.custom_fields or {})
+                existing_custom.update(product.custom_data or {})
                 existing_custom.update(custom_fields)
                 product.custom_fields = existing_custom
+                product.custom_data = existing_custom
                 product.is_active = True
                 product.updated_at = now
                 updated += 1

@@ -38,6 +38,7 @@ class Product(Base):
     is_active = Column(Boolean, nullable=False, default=True)
     image_urls = Column(MutableList.as_mutable(JSON), nullable=False, default=list)
     custom_fields = Column(MutableDict.as_mutable(_JSON_TYPE), nullable=False, default=dict)
+    custom_data = Column(MutableDict.as_mutable(_JSON_TYPE), nullable=False, default=dict)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -61,6 +62,28 @@ class ProductImportLog(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - representation helper
         return f"<ProductImportLog file_name={self.file_name!r} status={self.status!r}>"
+
+
+class ProductCustomField(Base):
+    __tablename__ = "product_custom_fields"
+    __table_args__ = (
+        Index("ix_product_custom_fields_order", "order", "key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    key = Column(String(64), nullable=False, unique=True, index=True)
+    name = Column(String(255), nullable=False)
+    field_type = Column("type", String(32), nullable=False, default="string")
+    default_value = Column("default", _JSON_TYPE, nullable=True)
+    required = Column(Boolean, nullable=False, default=False)
+    visible = Column(Boolean, nullable=False, default=True)
+    order = Column(Integer, nullable=False, default=100)
+    choices = Column(MutableList.as_mutable(_JSON_TYPE), nullable=False, default=list)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self) -> str:  # pragma: no cover - representation helper
+        return f"<ProductCustomField key={self.key!r} type={self.field_type!r}>"
 
 
 class ProductItem(Base):

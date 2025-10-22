@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import io
-import json
 from datetime import datetime
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
 import pandas as pd
 import streamlit as st
@@ -14,14 +13,16 @@ from demowb.db import SessionLocal
 from models import Product
 from product_service import (
     CUSTOM_PREFIX,
+    CustomFieldDefinition,
     ProductFilters,
     bulk_update_field,
-    collect_custom_field_keys,
     export_products_dataframe,
     fetch_import_logs,
     get_available_brands,
     import_products_from_dataframe,
+    load_custom_field_definitions,
     load_products_dataframe,
+    sanitize_custom_field_key,
     save_products_from_dataframe,
 )
 from sync import sync_products
@@ -72,26 +73,19 @@ TEMPLATE_SAMPLE_ROWS = [
 ]
 
 
-def _sanitize_custom_key(raw: str) -> Optional[str]:
-    if not raw:
-        return None
-    key = raw.strip().lower()
-    if not key:
-        return None
-    normalized_chars: List[str] = []
-    for char in key:
-        if char.isalnum():
-            normalized_chars.append(char)
-        elif char in {" ", "-", "_"}:
-            normalized_chars.append("_")
-    normalized = "".join(normalized_chars).strip("_")
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
-    return normalized or None
-
-
-def _build_template_dataframe() -> pd.DataFrame:
-    return pd.DataFrame(TEMPLATE_SAMPLE_ROWS)
+def _build_template_dataframe(custom_fields: Sequence[CustomFieldDefinition]) -> pd.DataFrame:
+    rows = [row.copy() for row in TEMPLATE_SAMPLE_ROWS]
+    for row in rows:
+        for field in custom_fields:
+            if field.field_type == "choice" and field.choices:
+                row[field.key] = field.choices[0]
+            elif field.default is not None:
+                row[field.key] = field.default
+            elif field.field_type == "boolean":
+                row[field.key] = False
+            else:
+                row[field.key] = ""
+    return pd.DataFrame(rows)
 
 
 def _read_uploaded_file(uploaded_file) -> pd.DataFrame:
@@ -104,38 +98,24 @@ def _read_uploaded_file(uploaded_file) -> pd.DataFrame:
     raise ValueError("Поддерживаются только файлы CSV и Excel")
 
 
-def _ensure_session_defaults(all_custom_fields: List[str]) -> None:
+def _ensure_session_defaults(custom_fields: Sequence[CustomFieldDefinition]) -> None:
     st.session_state.setdefault("products_search", "")
     st.session_state.setdefault("products_brand", "Все бренды")
     st.session_state.setdefault("products_active_only", False)
-    st.session_state.setdefault("products_visible_custom_fields", list(all_custom_fields))
-    st.session_state.setdefault("products_all_custom_fields", list(all_custom_fields))
     st.session_state.setdefault("products_import_df", None)
     st.session_state.setdefault("products_import_filename", None)
 
-    current_visible = st.session_state["products_visible_custom_fields"]
-    merged_visible = sorted(set(current_visible) | set(all_custom_fields))
-    st.session_state["products_visible_custom_fields"] = merged_visible
+    all_keys = [field.key for field in custom_fields]
+    default_visible = [field.key for field in custom_fields if field.visible]
 
-    current_all = st.session_state["products_all_custom_fields"]
-    merged_all = sorted(set(current_all) | set(all_custom_fields))
-    st.session_state["products_all_custom_fields"] = merged_all
+    st.session_state.setdefault("products_all_custom_fields", all_keys)
+    st.session_state.setdefault("products_visible_custom_fields", default_visible or all_keys)
 
-
-def _normalize_custom_cell(value: object) -> object:
-    try:
-        if pd.isna(value):  # type: ignore[arg-type]
-            return ""
-    except Exception:
-        pass
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list, tuple, set)):
-        try:
-            return json.dumps(value, ensure_ascii=False)
-        except Exception:  # noqa: BLE001
-            return str(value)
-    return value
+    st.session_state["products_all_custom_fields"] = all_keys
+    visible = [key for key in st.session_state["products_visible_custom_fields"] if key in all_keys]
+    if not visible and all_keys:
+        visible = default_visible or all_keys
+    st.session_state["products_visible_custom_fields"] = visible
 
 
 def _coerce_active(value: object) -> bool:
@@ -157,7 +137,11 @@ def _coerce_active(value: object) -> bool:
     return bool(value)
 
 
-def _prepare_editor_dataframe(df: pd.DataFrame, custom_fields: Sequence[str]) -> pd.DataFrame:
+def _prepare_editor_dataframe(
+    df: pd.DataFrame,
+    custom_fields: Mapping[str, CustomFieldDefinition],
+    visible_keys: Sequence[str],
+) -> pd.DataFrame:
     if df is None or df.empty:
         return df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
 
@@ -183,12 +167,45 @@ def _prepare_editor_dataframe(df: pd.DataFrame, custom_fields: Sequence[str]) ->
         if column in prepared.columns:
             prepared[column] = pd.to_datetime(prepared[column], errors="coerce")
 
-    for custom_key in custom_fields:
-        column_name = f"{CUSTOM_PREFIX}{custom_key}"
-        if column_name in prepared.columns:
-            prepared[column_name] = prepared[column_name].apply(_normalize_custom_cell)
+    for key in visible_keys:
+        definition = custom_fields.get(key)
+        if not definition:
+            continue
+        column_name = definition.column_name
+        if column_name not in prepared.columns:
+            continue
+        if definition.field_type == "number":
+            prepared[column_name] = pd.to_numeric(prepared[column_name], errors="coerce")
+        elif definition.field_type == "boolean":
+            prepared[column_name] = prepared[column_name].apply(lambda v: bool(v) if not pd.isna(v) else False)
+        elif definition.field_type == "date":
+            prepared[column_name] = pd.to_datetime(prepared[column_name], errors="coerce")
+        else:
+            prepared[column_name] = prepared[column_name].astype("string").fillna("")
 
     return prepared
+
+
+def _build_column_config(definition: CustomFieldDefinition):
+    try:
+        if definition.field_type == "number":
+            return st.column_config.NumberColumn(definition.name, format="%.2f")
+        if definition.field_type == "boolean":
+            return st.column_config.CheckboxColumn(definition.name)
+        if definition.field_type == "date":
+            return st.column_config.DateColumn(definition.name, format="YYYY-MM-DD")
+        if definition.field_type == "choice" and definition.choices:
+            try:
+                return st.column_config.SelectboxColumn(
+                    definition.name,
+                    options=definition.choices,
+                    required=False,
+                )
+            except Exception:
+                return st.column_config.TextColumn(definition.name)
+        return st.column_config.TextColumn(definition.name)
+    except Exception:
+        return st.column_config.TextColumn(definition.name)
 
 
 initialize_page(
@@ -199,13 +216,21 @@ initialize_page(
 )
 
 with SessionLocal() as session:
-    custom_keys_db = collect_custom_field_keys(session)
+    custom_field_defs = load_custom_field_definitions(session)
     available_brands = get_available_brands(session)
     total_products = session.scalar(select(func.count(Product.id))) or 0
 
-_ensure_session_defaults(custom_keys_db)
+_ensure_session_defaults(custom_field_defs)
 
-all_custom_fields = st.session_state["products_all_custom_fields"]
+custom_field_map: Dict[str, CustomFieldDefinition] = {field.key: field for field in custom_field_defs}
+ordered_keys = [field.key for field in custom_field_defs]
+all_custom_fields = [key for key in ordered_keys if key in st.session_state["products_all_custom_fields"]]
+st.session_state["products_all_custom_fields"] = all_custom_fields
+visible_custom_fields = [key for key in ordered_keys if key in st.session_state["products_visible_custom_fields"]]
+if not visible_custom_fields and ordered_keys:
+    visible_custom_fields = [field.key for field in custom_field_defs if field.visible] or ordered_keys
+    st.session_state["products_visible_custom_fields"] = visible_custom_fields
+
 visible_custom_fields = st.session_state["products_visible_custom_fields"]
 
 with st.sidebar:
@@ -235,36 +260,18 @@ with st.sidebar:
 
     st.markdown("---")
     with st.expander("Пользовательские колонки", expanded=False):
-        st.caption("Колонки из custom_fields можно добавлять и скрывать для отображения в таблице.")
+        st.caption("Настройте отображение полей. Для создания и редактирования полей перейдите на страницу управления.")
+        st.page_link("pages/Custom_Fields.py", label="Управление пользовательскими полями", icon="🛠️")
         selected_fields = st.multiselect(
             "Отображать в таблице",
-            options=st.session_state["products_all_custom_fields"],
-            default=st.session_state["products_visible_custom_fields"],
+            options=ordered_keys,
+            default=visible_custom_fields,
+            format_func=lambda key: f"{custom_field_map[key].name} ({key})" if key in custom_field_map else key,
             key="products_visible_custom_fields_selector",
         )
-        st.session_state["products_visible_custom_fields"] = sorted(selected_fields)
-
-        new_field_raw = st.text_input(
-            "Название новой колонки",
-            placeholder="например, color",
-            key="products_new_custom_field",
-        )
-        if st.button("Добавить колонку", key="products_add_custom_field"):
-            sanitized = _sanitize_custom_key(new_field_raw)
-            if not sanitized:
-                st.warning("Введите корректное название колонки (латиница, цифры, дефис или подчёркивание).")
-            else:
-                all_fields = set(st.session_state["products_all_custom_fields"])
-                if sanitized not in all_fields:
-                    all_fields.add(sanitized)
-                    st.session_state["products_all_custom_fields"] = sorted(all_fields)
-                visible_fields = set(st.session_state["products_visible_custom_fields"])
-                if sanitized not in visible_fields:
-                    visible_fields.add(sanitized)
-                    st.session_state["products_visible_custom_fields"] = sorted(visible_fields)
-                    st.success(f"Колонка '{sanitized}' добавлена и отображена.")
-                else:
-                    st.info("Такая колонка уже отображается.")
+        selected_set = set(selected_fields)
+        ordered_selected = [key for key in ordered_keys if key in selected_set]
+        st.session_state["products_visible_custom_fields"] = ordered_selected
 
         col_hide, col_show = st.columns(2)
         with col_hide:
@@ -272,9 +279,7 @@ with st.sidebar:
                 st.session_state["products_visible_custom_fields"] = []
         with col_show:
             if st.button("Показать все", key="products_show_all_custom"):
-                st.session_state["products_visible_custom_fields"] = sorted(
-                    st.session_state["products_all_custom_fields"]
-                )
+                st.session_state["products_visible_custom_fields"] = ordered_keys
 
 filters = ProductFilters(
     search=search_value or None,
@@ -284,9 +289,9 @@ filters = ProductFilters(
 visible_custom_fields = st.session_state["products_visible_custom_fields"]
 
 with SessionLocal() as session:
-    products_df, _ = load_products_dataframe(session, filters, visible_custom_fields)
+    products_df, _ = load_products_dataframe(session, filters, custom_field_defs, visible_custom_fields)
 
-products_df = _prepare_editor_dataframe(products_df, visible_custom_fields)
+products_df = _prepare_editor_dataframe(products_df, custom_field_map, visible_custom_fields)
 selection_count = len(products_df)
 
 catalog_tab, import_tab, export_tab, logs_tab = st.tabs([
@@ -330,8 +335,10 @@ with catalog_tab:
             "updated_at": st.column_config.DatetimeColumn("Обновлено", disabled=True, format="YYYY-MM-DD HH:mm"),
         }
         for custom_key in visible_custom_fields:
-            column_name = f"{CUSTOM_PREFIX}{custom_key}"
-            column_config[column_name] = st.column_config.TextColumn(custom_key)
+            definition = custom_field_map.get(custom_key)
+            if not definition:
+                continue
+            column_config[definition.column_name] = _build_column_config(definition)
 
         editable_df = st.data_editor(
             products_df,
@@ -344,11 +351,13 @@ with catalog_tab:
 
         if st.button("Сохранить изменения", type="primary", key="products_save"):
             with SessionLocal() as session:
-                _, original_products = load_products_dataframe(session, filters, visible_custom_fields)
+                definitions_for_save = load_custom_field_definitions(session)
+                _, original_products = load_products_dataframe(session, filters, definitions_for_save, visible_custom_fields)
                 save_result = save_products_from_dataframe(
                     session,
                     editable_df,
                     original_products,
+                    definitions_for_save,
                     visible_custom_fields,
                 )
             if save_result.errors:
@@ -384,8 +393,8 @@ with catalog_tab:
                 "nm_id": "NM ID",
             }
             custom_labels = {
-                f"{CUSTOM_PREFIX}{key}": f"Custom · {key}"
-                for key in st.session_state["products_all_custom_fields"]
+                f"{CUSTOM_PREFIX}{field.key}": f"Custom · {field.name} ({field.key})"
+                for field in custom_field_defs
             }
             field_labels.update(custom_labels)
             field_choice = st.selectbox(
@@ -397,12 +406,47 @@ with catalog_tab:
 
             is_custom = field_choice.startswith(CUSTOM_PREFIX)
             field_name = field_choice[len(CUSTOM_PREFIX) :] if is_custom else field_choice
+            definition_for_bulk = custom_field_map.get(field_name) if is_custom else None
 
             clear_value = st.checkbox("Очистить значение", value=False, key="products_bulk_clear")
 
             value_to_apply: Optional[object]
             if clear_value:
                 value_to_apply = None
+            elif is_custom and definition_for_bulk:
+                if definition_for_bulk.field_type == "number":
+                    value_to_apply = st.number_input(
+                        "Введите значение",
+                        value=0.0,
+                        step=0.5,
+                        format="%.2f",
+                        key=f"products_bulk_custom_number_{field_name}",
+                    )
+                elif definition_for_bulk.field_type == "boolean":
+                    value_to_apply = st.selectbox(
+                        "Статус",
+                        options=[True, False],
+                        format_func=lambda v: "Истина" if v else "Ложь",
+                        key=f"products_bulk_custom_bool_{field_name}",
+                    )
+                elif definition_for_bulk.field_type == "date":
+                    selected_date = st.date_input(
+                        "Дата",
+                        key=f"products_bulk_custom_date_{field_name}",
+                    )
+                    value_to_apply = selected_date.isoformat() if selected_date else None
+                elif definition_for_bulk.field_type == "choice" and definition_for_bulk.choices:
+                    value_to_apply = st.selectbox(
+                        "Выберите значение",
+                        options=definition_for_bulk.choices,
+                        key=f"products_bulk_custom_choice_{field_name}",
+                    )
+                else:
+                    value_to_apply = st.text_input(
+                        "Введите значение",
+                        value="",
+                        key=f"products_bulk_custom_text_{field_name}",
+                    )
             elif field_name == "price":
                 value_to_apply = st.number_input(
                     "Введите значение",
@@ -443,6 +487,7 @@ with catalog_tab:
                             field=field_name,
                             value=value_to_apply,
                             is_custom=is_custom,
+                            custom_definitions=custom_field_map,
                         )
                     if error_message:
                         st.error(error_message)
@@ -453,7 +498,7 @@ with catalog_tab:
 with import_tab:
     st.subheader("Импорт товаров из Excel или CSV")
 
-    template_df = _build_template_dataframe()
+    template_df = _build_template_dataframe(custom_field_defs)
     csv_template = template_df.to_csv(index=False).encode("utf-8")
     excel_buffer = io.BytesIO()
     template_df.to_excel(excel_buffer, index=False)
@@ -546,24 +591,34 @@ with import_tab:
             field_mapping[key_target] = key_column
             mapped_columns = {column for column in field_mapping.values() if column}
             candidate_custom_columns = [col for col in columns if col not in mapped_columns]
-            selected_custom_columns = st.multiselect(
-                "Колонки для custom_fields",
-                options=columns,
-                default=candidate_custom_columns,
-                key="products_import_custom_columns",
-            )
 
             custom_field_mapping: Dict[str, str] = {}
-            for column_name in selected_custom_columns:
-                sanitized_default = _sanitize_custom_key(column_name) or column_name.lower()
-                custom_key_value = st.text_input(
-                    f"Поле custom_fields для '{column_name}'",
-                    value=sanitized_default,
-                    key=f"products_import_custom_key_{column_name}",
+            if custom_field_defs:
+                custom_options = [field.key for field in custom_field_defs]
+                default_preselect = [
+                    col
+                    for col in candidate_custom_columns
+                    if sanitize_custom_field_key(col) in custom_field_map
+                ] or candidate_custom_columns
+                selected_custom_columns = st.multiselect(
+                    "Колонки для custom_fields",
+                    options=columns,
+                    default=default_preselect,
+                    key="products_import_custom_columns",
                 )
-                sanitized_key = _sanitize_custom_key(custom_key_value) or _sanitize_custom_key(column_name)
-                if sanitized_key:
-                    custom_field_mapping[column_name] = sanitized_key
+                for column_name in selected_custom_columns:
+                    sanitized_column = sanitize_custom_field_key(column_name)
+                    default_key = sanitized_column if sanitized_column in custom_field_map else None
+                    field_key = st.selectbox(
+                        f"Поле custom_fields для '{column_name}'",
+                        options=custom_options,
+                        index=custom_options.index(default_key) if default_key in custom_options else 0,
+                        format_func=lambda key: f"{custom_field_map[key].name} ({key})" if key in custom_field_map else key,
+                        key=f"products_import_custom_key_{column_name}",
+                    )
+                    custom_field_mapping[column_name] = field_key
+            else:
+                st.info("Пользовательские поля отсутствуют. Создайте их перед сопоставлением колонок.")
 
             submit_import = st.form_submit_button("Импортировать данные", type="primary")
 
@@ -579,6 +634,7 @@ with import_tab:
                 else:
                     try:
                         with SessionLocal() as session:
+                            definitions_for_import = load_custom_field_definitions(session)
                             import_result = import_products_from_dataframe(
                                 session,
                                 import_df,
@@ -587,6 +643,7 @@ with import_tab:
                                 field_mapping=field_mapping,
                                 custom_field_mapping=custom_field_mapping,
                                 file_name=import_filename,
+                                field_definitions=definitions_for_import,
                             )
                         if import_result.errors:
                             st.warning(
@@ -628,10 +685,12 @@ with export_tab:
         value=st.session_state.get("products_export_active", False),
         key="products_export_active",
     )
+    default_export_fields = st.session_state.get("products_export_custom_fields", ordered_keys)
     export_custom_fields = st.multiselect(
         "Поля custom_fields",
-        options=st.session_state["products_all_custom_fields"],
-        default=st.session_state["products_all_custom_fields"],
+        options=ordered_keys,
+        default=default_export_fields if default_export_fields else ordered_keys,
+        format_func=lambda key: f"{custom_field_map[key].name} ({key})" if key in custom_field_map else key,
         key="products_export_custom_fields",
     )
     export_format = st.selectbox(
@@ -648,7 +707,7 @@ with export_tab:
             active_only=export_active_only,
         )
         with SessionLocal() as session:
-            export_df = export_products_dataframe(session, export_filters, export_custom_fields)
+            export_df = export_products_dataframe(session, export_filters, custom_field_defs, export_custom_fields)
         if export_df.empty:
             st.info("Нет данных для экспорта по заданным фильтрам.")
         else:
