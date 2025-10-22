@@ -8,7 +8,8 @@ import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
 
-from db import SessionLocal, init_db
+from app_layout import initialize_page
+from db import SessionLocal
 from models import Product
 from product_service import (
     CUSTOM_PREFIX,
@@ -120,10 +121,12 @@ def _ensure_session_defaults(all_custom_fields: List[str]) -> None:
     st.session_state["products_all_custom_fields"] = merged_all
 
 
-st.set_page_config(page_title="Products", layout="wide")
-st.title("Управление товарами")
-
-init_db()
+initialize_page(
+    page_title="Управление товарами",
+    page_icon="📦",
+    current_page="pages/1_Products.py",
+    description="Каталог с импортом, экспортом и пользовательскими полями",
+)
 
 with SessionLocal() as session:
     custom_keys_db = collect_custom_field_keys(session)
