@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
 import pandas as pd
 from sqlalchemy import String, cast, func, or_, select
@@ -15,17 +17,134 @@ CUSTOM_PREFIX = "custom::"
 BASE_COLUMNS = [
     "id",
     "sku",
+    "seller_sku",
+    "wb_sku",
     "nm_id",
     "title",
     "brand",
     "category",
+    "price_src",
+    "seller_discount_pct",
     "price",
     "stock",
+    "stock_wb",
+    "stock_seller",
+    "turnover_days",
+    "product_cost",
+    "shipping_cost",
+    "logistics_back_cost",
+    "warehouse_coeff",
+    "weight_kg",
+    "package_l_cm",
+    "package_w_cm",
+    "package_h_cm",
+    "volume_l",
     "barcode",
+    "comments",
     "is_active",
 ]
 READ_ONLY_COLUMNS = ["created_at", "updated_at"]
 CUSTOM_FIELD_TYPES = {"string", "number", "boolean", "date", "choice"}
+COMPUTED_COLUMNS = ["price_final", "commission", "tax", "margin", "margin_percent"]
+FLOAT_FIELDS = {
+    "price_src",
+    "seller_discount_pct",
+    "product_cost",
+    "shipping_cost",
+    "logistics_back_cost",
+    "warehouse_coeff",
+    "weight_kg",
+    "package_l_cm",
+    "package_w_cm",
+    "package_h_cm",
+    "volume_l",
+    "turnover_days",
+}
+INT_FIELDS = {"stock", "stock_wb", "stock_seller"}
+DEFAULT_COMMISSION_KEY = "commission_pct"
+DEFAULT_TAX_KEY = "tax_pct"
+IMPORT_HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "sku": ("sku", "артикул", "артикул_карточки"),
+    "seller_sku": ("seller_sku", "артикул продавца", "артикул_продавца", "sku продавца"),
+    "wb_sku": ("wb_sku", "артикул wb", "wb sku", "артикул_wb"),
+    "nm_id": ("nm_id", "nm id", "nm", "nm_id_товара"),
+    "title": ("title", "название", "наименование"),
+    "brand": ("brand", "бренд"),
+    "category": ("category", "категория", "категория товара"),
+    "price_src": ("price_src", "текущая цена", "цена", "цена на витрине"),
+    "seller_discount_pct": ("seller_discount_pct", "скидка", "скидка продавца", "дисконт", "скидка, %"),
+    "price": ("price", "итоговая цена", "price_final", "цена со скидкой"),
+    "stock": ("stock", "остаток", "количество"),
+    "stock_wb": ("stock_wb", "остатки wb", "остаток wb", "wb stock"),
+    "stock_seller": ("stock_seller", "остатки продавца", "seller stock"),
+    "turnover_days": ("turnover_days", "оборачиваемость", "дни оборачиваемости"),
+    "product_cost": ("product_cost", "себик", "себестоимость", "cost"),
+    "shipping_cost": ("shipping_cost", "транспортировка", "доставка", "shipping"),
+    "logistics_back_cost": (
+        "logistics_back_cost",
+        "логистика возврата",
+        "возврат",
+        "стоимость возврата",
+    ),
+    "warehouse_coeff": ("warehouse_coeff", "кофф склада", "коэф склада", "складской коэффициент"),
+    "weight_kg": ("weight_kg", "вес", "вес с упаковкой", "вес с упаковкой (кг)"),
+    "package_l_cm": ("package_l_cm", "длина упаковки", "длина, см"),
+    "package_w_cm": ("package_w_cm", "ширина упаковки", "ширина, см"),
+    "package_h_cm": ("package_h_cm", "высота упаковки", "высота, см"),
+    "volume_l": ("volume_l", "литраж", "объем", "объем, л"),
+    "barcode": ("barcode", "штрихкод", "штрих-код"),
+    "comments": ("comments", "комменты", "комментарии", "примечания"),
+    "custom_data": ("custom_data", "доп_данные", "extra", "json"),
+}
+COMPUTED_IMPORT_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "price_final": ("текущая цена со скид.", "текущая цена со скидкой", "итоговая цена"),
+}
+
+
+def normalize_header_label(label: object) -> str:
+    if label is None:
+        return ""
+    text = str(label).strip().lower()
+    text = text.replace("\u00a0", " ")
+    text = text.replace("ё", "е")
+    text = re.sub(r"[\\/|:;,+%()\[\]{}]+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    text = text.strip()
+    normalized = text.replace(" ", "_")
+    normalized = re.sub(r"__+", "_", normalized)
+    return normalized
+
+
+def guess_import_column(field: str, columns: Sequence[str]) -> Optional[str]:
+    normalized_columns = {}
+    for column in columns:
+        key = normalize_header_label(column)
+        if key and key not in normalized_columns:
+            normalized_columns[key] = column
+    aliases = IMPORT_HEADER_ALIASES.get(field)
+    if aliases:
+        for alias in aliases:
+            candidate = normalized_columns.get(normalize_header_label(alias))
+            if candidate:
+                return candidate
+    computed_aliases = COMPUTED_IMPORT_ALIASES.get(field)
+    if computed_aliases:
+        for alias in computed_aliases:
+            candidate = normalized_columns.get(normalize_header_label(alias))
+            if candidate:
+                return candidate
+    fallback = normalized_columns.get(normalize_header_label(field))
+    if fallback:
+        return fallback
+    return None
+
+
+def available_aliases(field: str) -> Tuple[str, ...]:
+    if field in IMPORT_HEADER_ALIASES:
+        return IMPORT_HEADER_ALIASES[field]
+    if field in COMPUTED_IMPORT_ALIASES:
+        return COMPUTED_IMPORT_ALIASES[field]
+    return (field,)
 
 
 @dataclass
@@ -95,12 +214,22 @@ def _normalize_float(value: object) -> Optional[float]:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     if isinstance(value, str):
-        text = value.strip().replace(" ", "")
+        text = value.strip().lower()
         if not text:
             return None
+        text = text.replace("\u00a0", "")
+        text = text.replace(" ", "")
+        text = text.replace("₽", "")
+        text = text.replace("руб", "")
+        text = text.replace("р.", "")
+        if text.endswith("%"):
+            text = text[:-1]
         text = text.replace(",", ".")
+        cleaned = re.sub(r"[^0-9eE+\-\.]+", "", text)
+        if not cleaned:
+            return None
         try:
-            return float(text)
+            return float(cleaned)
         except ValueError:
             return None
     return None
@@ -185,6 +314,89 @@ def _normalize_choices(values: Sequence[object]) -> List[str]:
     return normalized
 
 
+def _calculate_volume_from_dimensions(
+    length_cm: Optional[float],
+    width_cm: Optional[float],
+    height_cm: Optional[float],
+) -> Optional[float]:
+    if length_cm is None or width_cm is None or height_cm is None:
+        return None
+    if length_cm <= 0 or width_cm <= 0 or height_cm <= 0:
+        return None
+    return (length_cm * width_cm * height_cm) / 1000.0
+
+
+def _compute_price_final(
+    price_src: Optional[float],
+    discount_pct: Optional[float],
+    *,
+    fallback: Optional[float] = None,
+) -> Optional[float]:
+    base_price = price_src if price_src is not None else fallback
+    if base_price is None:
+        return None
+    discount = max(min(discount_pct or 0.0, 100.0), 0.0)
+    final_price = base_price * (1 - discount / 100.0)
+    return max(final_price, 0.0)
+
+
+def _extract_rate(custom_data: Mapping[str, object], key: str) -> Optional[float]:
+    if not isinstance(custom_data, Mapping):
+        return None
+    raw_value = custom_data.get(key)
+    value = _normalize_float(raw_value)
+    if value is None:
+        return None
+    return max(value, 0.0)
+
+
+def _coerce_dict(value: object) -> Dict[str, object]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _parse_custom_data_cell(raw: object) -> Tuple[Dict[str, object], Set[str], Optional[str]]:
+    if raw is None:
+        return {}, set(), None
+    if isinstance(raw, dict):
+        values: Dict[str, object] = {}
+        to_remove: Set[str] = set()
+        for key, value in raw.items():
+            key_str = str(key)
+            if value is None:
+                to_remove.add(key_str)
+            else:
+                values[key_str] = value
+        return values, to_remove, None
+    if isinstance(raw, str):
+        if not raw.strip():
+            return {}, set(), None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            return {}, set(), f"Некорректный JSON custom_data: {exc}"
+        if isinstance(parsed, dict):
+            values: Dict[str, object] = {}
+            to_remove: Set[str] = set()
+            for key, value in parsed.items():
+                key_str = str(key)
+                if value is None:
+                    to_remove.add(key_str)
+                else:
+                    values[key_str] = value
+            return values, to_remove, None
+        return {}, set(), "custom_data должен быть объектом JSON"
+    return {}, set(), None
+
+
 def _normalize_custom_value(definition: CustomFieldDefinition, value: object) -> Optional[object]:
     field_type = definition.field_type
     if field_type == "string":
@@ -242,6 +454,41 @@ def _merge_custom_payload(product: Product) -> Dict[str, Any]:
     if isinstance(product.custom_data, dict):
         payload.update(product.custom_data)
     return payload
+
+
+def _calculate_product_metrics(product: Product) -> Dict[str, Optional[float]]:
+    custom_payload = _coerce_dict(getattr(product, "custom_data", {}))
+    commission_rate = _extract_rate(custom_payload, DEFAULT_COMMISSION_KEY) or 0.0
+    tax_rate = _extract_rate(custom_payload, DEFAULT_TAX_KEY) or 0.0
+    price_src = product.price_src
+    price_final = _compute_price_final(price_src, product.seller_discount_pct, fallback=product.price)
+    commission_value = price_final * commission_rate / 100.0 if price_final is not None else None
+    tax_value = price_final * tax_rate / 100.0 if price_final is not None else None
+
+    if price_final is not None:
+        margin_value = price_final
+        margin_value -= commission_value or 0.0
+        margin_value -= tax_value or 0.0
+        margin_value -= product.product_cost or 0.0
+        margin_value -= product.shipping_cost or 0.0
+        margin_value -= product.logistics_back_cost or 0.0
+        margin_value -= product.warehouse_coeff or 0.0
+    else:
+        margin_value = None
+
+    margin_percent: Optional[float]
+    if margin_value is not None and product.product_cost:
+        margin_percent = (margin_value / product.product_cost) * 100.0 if product.product_cost else None
+    else:
+        margin_percent = None
+
+    return {
+        "price_final": price_final,
+        "commission": commission_value,
+        "tax": tax_value,
+        "margin": margin_value,
+        "margin_percent": margin_percent,
+    }
 
 
 def _sync_product_custom_payload(
@@ -366,16 +613,68 @@ def load_products_dataframe(
     products = session.scalars(stmt).all()
     rows: List[Dict[str, object]] = []
     for product in products:
+        metrics = _calculate_product_metrics(product)
+        price_final = metrics.get("price_final")
+        price_value = price_final if price_final is not None else product.price
+        price_src = product.price_src if product.price_src is not None else price_value
+        discount_pct = product.seller_discount_pct
+
+        stock_wb = product.stock_wb
+        stock_seller = product.stock_seller
+        stock_total = product.stock
+        if stock_total is None:
+            if stock_wb is not None or stock_seller is not None:
+                total_candidate = (stock_wb or 0) + (stock_seller or 0)
+                stock_total = total_candidate
+
+        volume_value = product.volume_l
+        if volume_value is None:
+            volume_value = _calculate_volume_from_dimensions(
+                product.package_l_cm,
+                product.package_w_cm,
+                product.package_h_cm,
+            )
+
+        custom_data_dict = _coerce_dict(getattr(product, "custom_data", {}))
+        custom_data_json = (
+            json.dumps(custom_data_dict, ensure_ascii=False, sort_keys=True, indent=2)
+            if custom_data_dict
+            else "{}"
+        )
+
         row: Dict[str, object] = {
             "id": product.id,
             "sku": product.sku,
+            "seller_sku": product.seller_sku,
+            "wb_sku": product.wb_sku,
             "nm_id": product.nm_id,
             "title": product.title,
             "brand": product.brand,
             "category": product.category,
-            "price": product.price,
-            "stock": product.stock,
+            "price_src": price_src,
+            "seller_discount_pct": discount_pct,
+            "price": price_value,
+            "price_final": price_final,
+            "stock": stock_total,
+            "stock_wb": stock_wb,
+            "stock_seller": stock_seller,
+            "turnover_days": product.turnover_days,
+            "product_cost": product.product_cost,
+            "shipping_cost": product.shipping_cost,
+            "logistics_back_cost": product.logistics_back_cost,
+            "warehouse_coeff": product.warehouse_coeff,
+            "weight_kg": product.weight_kg,
+            "package_l_cm": product.package_l_cm,
+            "package_w_cm": product.package_w_cm,
+            "package_h_cm": product.package_h_cm,
+            "volume_l": volume_value,
             "barcode": product.barcode,
+            "comments": product.comments,
+            "commission": metrics.get("commission"),
+            "tax": metrics.get("tax"),
+            "margin": metrics.get("margin"),
+            "margin_percent": metrics.get("margin_percent"),
+            "custom_data": custom_data_json,
             "is_active": product.is_active,
             "created_at": product.created_at.isoformat() if product.created_at else None,
             "updated_at": product.updated_at.isoformat() if product.updated_at else None,
@@ -400,15 +699,44 @@ def load_products_dataframe(
     if df.empty:
         return df, products
 
-    if "price" in df.columns:
-        df["price"] = pd.to_numeric(df["price"], errors="coerce")
-    if "stock" in df.columns:
-        df["stock"] = pd.to_numeric(df["stock"], errors="coerce").astype("Int64")
+    float_columns = [
+        "price",
+        "price_src",
+        "seller_discount_pct",
+        "price_final",
+        "product_cost",
+        "shipping_cost",
+        "logistics_back_cost",
+        "warehouse_coeff",
+        "weight_kg",
+        "package_l_cm",
+        "package_w_cm",
+        "package_h_cm",
+        "volume_l",
+        "commission",
+        "tax",
+        "margin",
+        "margin_percent",
+        "turnover_days",
+    ]
+    for column in float_columns:
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    for column in ("stock", "stock_wb", "stock_seller"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce").astype("Int64")
+
     if "nm_id" in df.columns:
         df["nm_id"] = pd.to_numeric(df["nm_id"], errors="coerce").astype("Int64")
-    for column in ("sku", "title", "brand", "category", "barcode"):
+
+    for column in ("sku", "title", "brand", "category", "barcode", "seller_sku", "wb_sku", "comments"):
         if column in df.columns:
             df[column] = df[column].astype("string").fillna("")
+
+    if "custom_data" in df.columns:
+        df["custom_data"] = df["custom_data"].astype("string").fillna("{}")
+
     for column in ("created_at", "updated_at"):
         if column in df.columns:
             df[column] = pd.to_datetime(df[column], errors="coerce")
@@ -483,12 +811,39 @@ def save_products_from_dataframe(
         nm_id_value = _normalize_int(row.get("nm_id"))
         brand = _normalize_str(row.get("brand"))
         category = _normalize_str(row.get("category"))
-        price = _normalize_float(row.get("price"))
-        stock = _normalize_int(row.get("stock"))
+        seller_sku = _normalize_str(row.get("seller_sku"))
+        wb_sku = _normalize_str(row.get("wb_sku"))
+        price_src_value = _normalize_float(row.get("price_src"))
+        discount_value = _normalize_float(row.get("seller_discount_pct"))
+        price_final_cell = _normalize_float(row.get("price_final"))
+        price_value = _compute_price_final(price_src_value, discount_value, fallback=price_final_cell)
+        if price_value is None:
+            price_value = _normalize_float(row.get("price"))
+        if price_src_value is None and price_value is not None:
+            price_src_value = price_value
+        stock_total = _normalize_int(row.get("stock"))
+        stock_wb_value = _normalize_int(row.get("stock_wb"))
+        stock_seller_value = _normalize_int(row.get("stock_seller"))
+        if stock_total is None:
+            if stock_wb_value is not None or stock_seller_value is not None:
+                stock_total = (stock_wb_value or 0) + (stock_seller_value or 0)
         barcode = _normalize_str(row.get("barcode"))
         is_active = _normalize_bool(row.get("is_active"))
         if is_active is None:
             is_active = True
+        turnover_value = _normalize_float(row.get("turnover_days"))
+        product_cost_value = _normalize_float(row.get("product_cost"))
+        shipping_cost_value = _normalize_float(row.get("shipping_cost"))
+        logistics_back_value = _normalize_float(row.get("logistics_back_cost"))
+        warehouse_coeff_value = _normalize_float(row.get("warehouse_coeff"))
+        weight_value = _normalize_float(row.get("weight_kg"))
+        package_l = _normalize_float(row.get("package_l_cm"))
+        package_w = _normalize_float(row.get("package_w_cm"))
+        package_h = _normalize_float(row.get("package_h_cm"))
+        volume_value = _normalize_float(row.get("volume_l"))
+        if volume_value is None:
+            volume_value = _calculate_volume_from_dimensions(package_l, package_w, package_h)
+        comments_value = _normalize_str(row.get("comments"))
 
         custom_updates: Dict[str, Optional[object]] = {}
         for key in visible_keys:
@@ -516,47 +871,106 @@ def save_products_from_dataframe(
         if result.errors:
             continue
 
+        custom_data_values, custom_data_remove, custom_data_error = _parse_custom_data_cell(row.get("custom_data"))
+        if custom_data_error:
+            result.errors.append(f"Строка {idx}: {custom_data_error}")
+            continue
+
         if product_id and product_id in original_map:
             product = original_map[product_id]
             processed_ids.add(product_id)
             product.sku = sku
+            product.seller_sku = seller_sku
+            product.wb_sku = wb_sku
             product.nm_id = nm_id_value
             product.title = title
             product.brand = brand
             product.category = category
-            product.price = price
-            product.stock = stock
+            product.price_src = price_src_value
+            product.seller_discount_pct = discount_value
+            product.price = price_value
+            product.product_cost = product_cost_value
+            product.shipping_cost = shipping_cost_value
+            product.logistics_back_cost = logistics_back_value
+            product.warehouse_coeff = warehouse_coeff_value
+            product.stock = stock_total
+            product.stock_wb = stock_wb_value
+            product.stock_seller = stock_seller_value
+            product.turnover_days = turnover_value
+            product.weight_kg = weight_value
+            product.package_l_cm = package_l
+            product.package_w_cm = package_w
+            product.package_h_cm = package_h
+            product.volume_l = volume_value
             product.barcode = barcode
+            product.comments = comments_value
             product.is_active = bool(is_active)
+
             custom_payload = dict(product.custom_data or {})
+            for key in custom_data_remove:
+                custom_payload.pop(key, None)
+            for key, value in custom_data_values.items():
+                custom_payload[key] = value
             for key, value in custom_updates.items():
                 if value is None:
                     custom_payload.pop(key, None)
                 else:
                     custom_payload[key] = value
-            _sync_product_custom_payload(product, custom_payload, recognized_keys, keys_to_remove=custom_updates.keys())
+            keys_to_remove = set(custom_updates.keys()) | custom_data_remove
+            _sync_product_custom_payload(
+                product,
+                custom_payload,
+                recognized_keys,
+                keys_to_remove=list(keys_to_remove),
+            )
             product.updated_at = now
             result.updated += 1
         else:
-            custom_payload = {
-                key: value
-                for key, value in custom_updates.items()
-                if value is not None
-            }
+            custom_payload = dict(custom_data_values)
+            for key in custom_data_remove:
+                custom_payload.pop(key, None)
+            for key, value in custom_updates.items():
+                if value is None:
+                    custom_payload.pop(key, None)
+                else:
+                    custom_payload[key] = value
+            keys_to_remove = set(custom_updates.keys()) | custom_data_remove
             new_product = Product(
                 sku=sku,
+                seller_sku=seller_sku,
+                wb_sku=wb_sku,
                 nm_id=nm_id_value,
                 title=title,
                 brand=brand,
                 category=category,
-                price=price,
-                stock=stock,
+                price_src=price_src_value,
+                seller_discount_pct=discount_value,
+                price=price_value,
+                product_cost=product_cost_value,
+                shipping_cost=shipping_cost_value,
+                logistics_back_cost=logistics_back_value,
+                warehouse_coeff=warehouse_coeff_value,
+                stock=stock_total,
+                stock_wb=stock_wb_value,
+                stock_seller=stock_seller_value,
+                turnover_days=turnover_value,
+                weight_kg=weight_value,
+                package_l_cm=package_l,
+                package_w_cm=package_w,
+                package_h_cm=package_h,
+                volume_l=volume_value,
                 barcode=barcode,
+                comments=comments_value,
                 is_active=bool(is_active),
                 created_at=now,
                 updated_at=now,
             )
-            _sync_product_custom_payload(new_product, custom_payload, recognized_keys, keys_to_remove=custom_updates.keys())
+            _sync_product_custom_payload(
+                new_product,
+                custom_payload,
+                recognized_keys,
+                keys_to_remove=list(keys_to_remove),
+            )
             session.add(new_product)
             result.inserted += 1
 
@@ -610,7 +1024,9 @@ def import_products_from_dataframe(
     if key_column not in cleaned_df.columns:
         raise ValueError("Выбранный ключевой столбец отсутствует в данных.")
 
-    valid_rows: List[Tuple[int, Dict[str, object], Dict[str, object]]] = []
+    valid_rows: List[
+        Tuple[int, Dict[str, object], Dict[str, object], Dict[str, object], Set[str]]
+    ] = []
     seen_keys: Dict[str, int] = {}
     for idx, row in cleaned_df.iterrows():
         raw_key = row.get(key_column)
@@ -632,27 +1048,83 @@ def import_products_from_dataframe(
         seen_keys[key_value] = 1
 
         payload: Dict[str, object] = {}
+        custom_data_values: Dict[str, object] = {}
+        custom_data_remove: Set[str] = set()
+        custom_data_error: Optional[str] = None
+        price_final_from_file: Optional[float] = None
+
         for model_field, column_name in field_mapping.items():
             if not column_name:
                 continue
             value = row.get(column_name)
-            if model_field in {"sku", "title", "brand", "category", "barcode"}:
+            if model_field in {"sku", "seller_sku", "wb_sku", "title", "brand", "category", "barcode", "comments"}:
                 payload[model_field] = _normalize_str(value)
-            elif model_field == "price":
+            elif model_field in {
+                "price",
+                "price_src",
+                "seller_discount_pct",
+                "product_cost",
+                "shipping_cost",
+                "logistics_back_cost",
+                "warehouse_coeff",
+                "weight_kg",
+                "package_l_cm",
+                "package_w_cm",
+                "package_h_cm",
+                "volume_l",
+                "turnover_days",
+            }:
                 payload[model_field] = _normalize_float(value)
-            elif model_field == "stock":
+            elif model_field in {"stock", "stock_wb", "stock_seller"}:
                 payload[model_field] = _normalize_int(value)
             elif model_field == "is_active":
                 bool_value = _normalize_bool(value)
                 payload[model_field] = True if bool_value is None else bool_value
             elif model_field == "nm_id":
                 payload[model_field] = _normalize_int(value)
+            elif model_field == "custom_data":
+                parsed_values, parsed_remove, error_message = _parse_custom_data_cell(value)
+                if error_message:
+                    custom_data_error = error_message
+                    break
+                custom_data_values.update(parsed_values)
+                custom_data_remove.update(parsed_remove)
+            elif model_field == "price_final":
+                price_final_from_file = _normalize_float(value)
             else:
                 payload[model_field] = _normalize_generic(value)
+
+        if custom_data_error:
+            errors.append(f"Строка {idx + 2}: {custom_data_error}")
+            continue
 
         if "title" not in payload or not payload.get("title"):
             errors.append(f"Строка {idx + 2}: не заполнено поле 'Название'")
             continue
+
+        if payload.get("volume_l") is None:
+            volume_candidate = _calculate_volume_from_dimensions(
+                payload.get("package_l_cm"),
+                payload.get("package_w_cm"),
+                payload.get("package_h_cm"),
+            )
+            if volume_candidate is not None:
+                payload["volume_l"] = volume_candidate
+
+        price_final_value = _compute_price_final(
+            payload.get("price_src"),
+            payload.get("seller_discount_pct"),
+            fallback=price_final_from_file if price_final_from_file is not None else payload.get("price"),
+        )
+        if price_final_value is not None:
+            payload["price"] = price_final_value
+            if payload.get("price_src") is None:
+                payload["price_src"] = price_final_value
+
+        if payload.get("stock") is None:
+            stock_parts = [value for value in (payload.get("stock_wb"), payload.get("stock_seller")) if value is not None]
+            if stock_parts:
+                payload["stock"] = sum(stock_parts)
 
         custom_payload: Dict[str, object] = {}
         for column_name, custom_key in custom_field_mapping.items():
@@ -674,7 +1146,7 @@ def import_products_from_dataframe(
                 continue
             custom_payload[custom_key] = normalized
 
-        valid_rows.append((idx, payload, custom_payload))
+        valid_rows.append((idx, payload, custom_payload, custom_data_values, custom_data_remove))
 
     key_values = [
         _normalize_int(row.get(key_column)) if key_target == "nm_id" else _normalize_str(row.get(key_column))
@@ -694,15 +1166,24 @@ def import_products_from_dataframe(
             elif key_target == "sku" and product.sku:
                 existing_map[product.sku] = product
 
-    operations: List[Tuple[str, Product, Dict[str, object], Dict[str, object]]] = []
-    for idx, payload, custom_payload in valid_rows:
+    operations: List[
+        Tuple[
+            str,
+            Product,
+            Dict[str, object],
+            Dict[str, object],
+            Dict[str, object],
+            Set[str],
+        ]
+    ] = []
+    for idx, payload, custom_payload, base_custom_data, custom_remove in valid_rows:
         key_value = payload.get("nm_id") if key_target == "nm_id" else payload.get("sku")
         key_str = str(key_value) if key_value is not None else str(cleaned_df.iloc[idx][key_column])
         existing = existing_map.get(key_str)
         if existing:
-            operations.append(("update", existing, payload, custom_payload))
+            operations.append(("update", existing, payload, custom_payload, base_custom_data, custom_remove))
         else:
-            operations.append(("create", Product(), payload, custom_payload))
+            operations.append(("create", Product(), payload, custom_payload, base_custom_data, custom_remove))
 
     inserted = sum(1 for op in operations if op[0] == "create")
     updated = sum(1 for op in operations if op[0] == "update")
@@ -710,36 +1191,67 @@ def import_products_from_dataframe(
     success = False
     try:
         now = datetime.utcnow()
-        for action, product, payload, custom_payload in operations:
+        for action, product, payload, custom_payload, base_custom_data, custom_remove in operations:
             if action == "create":
                 product = Product(
                     sku=payload.get("sku"),
+                    seller_sku=payload.get("seller_sku"),
+                    wb_sku=payload.get("wb_sku"),
                     nm_id=payload.get("nm_id"),
                     title=payload.get("title"),
                     brand=payload.get("brand"),
                     category=payload.get("category"),
+                    price_src=payload.get("price_src"),
+                    seller_discount_pct=payload.get("seller_discount_pct"),
                     price=payload.get("price"),
+                    product_cost=payload.get("product_cost"),
+                    shipping_cost=payload.get("shipping_cost"),
+                    logistics_back_cost=payload.get("logistics_back_cost"),
+                    warehouse_coeff=payload.get("warehouse_coeff"),
                     stock=payload.get("stock"),
+                    stock_wb=payload.get("stock_wb"),
+                    stock_seller=payload.get("stock_seller"),
+                    turnover_days=payload.get("turnover_days"),
+                    weight_kg=payload.get("weight_kg"),
+                    package_l_cm=payload.get("package_l_cm"),
+                    package_w_cm=payload.get("package_w_cm"),
+                    package_h_cm=payload.get("package_h_cm"),
+                    volume_l=payload.get("volume_l"),
                     barcode=payload.get("barcode"),
+                    comments=payload.get("comments"),
                     is_active=payload.get("is_active", True) if payload.get("is_active") is not None else True,
                     created_at=now,
                     updated_at=now,
                 )
-                _sync_product_custom_payload(product, custom_payload, recognized_keys, keys_to_remove=custom_payload.keys())
                 session.add(product)
             else:
                 for key, value in payload.items():
                     if key == "nm_id" and value is None:
                         continue
+                    if key == "is_active" and value is None:
+                        value = True
                     setattr(product, key, value)
-                merged_custom = dict(product.custom_data or {})
-                for key, value in custom_payload.items():
-                    merged_value = value
-                    if merged_value is None and key in merged_custom:
-                        merged_custom.pop(key, None)
-                    elif merged_value is not None:
-                        merged_custom[key] = merged_value
-                _sync_product_custom_payload(product, merged_custom, recognized_keys, keys_to_remove=custom_payload.keys())
+                product.updated_at = now
+
+            current_custom = dict(product.custom_data or {}) if action == "update" else {}
+            for key in custom_remove:
+                current_custom.pop(key, None)
+            for key, value in base_custom_data.items():
+                current_custom[key] = value
+            for key, value in custom_payload.items():
+                if value is None:
+                    current_custom.pop(key, None)
+                else:
+                    current_custom[key] = value
+            keys_to_remove = set(custom_payload.keys()) | custom_remove
+            _sync_product_custom_payload(
+                product,
+                current_custom,
+                recognized_keys,
+                keys_to_remove=list(keys_to_remove),
+            )
+            if action == "create":
+                product.created_at = now
                 product.updated_at = now
         session.commit()
         success = True
@@ -852,17 +1364,29 @@ def bulk_update_field(
         normalized_value = None
 
     if not is_custom:
-        if field in {"sku", "title", "brand", "category", "barcode"}:
+        if field in {"sku", "seller_sku", "wb_sku", "title", "brand", "category", "barcode", "comments"}:
             normalized_value = _normalize_str(value)
-        elif field == "price":
+        elif field in {
+            "price",
+            "price_src",
+            "seller_discount_pct",
+            "product_cost",
+            "shipping_cost",
+            "logistics_back_cost",
+            "warehouse_coeff",
+            "turnover_days",
+            "weight_kg",
+            "package_l_cm",
+            "package_w_cm",
+            "package_h_cm",
+            "volume_l",
+        }:
             normalized_value = _normalize_float(value)
-        elif field == "stock":
+        elif field in {"stock", "stock_wb", "stock_seller", "nm_id"}:
             normalized_value = _normalize_int(value)
         elif field == "is_active":
             normalized_bool = _normalize_bool(value)
             normalized_value = True if normalized_bool is None else normalized_bool
-        elif field == "nm_id":
-            normalized_value = _normalize_int(value)
         else:
             normalized_value = _normalize_generic(value)
 
