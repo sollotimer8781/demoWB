@@ -7,7 +7,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from app_layout import initialize_page
 from demowb.db import init_db
 from sync_wb import load_wb_products_df, sync_wb
-from wb_client import WBAPIError, WBClient, WBConfigurationError, get_token_from_secrets
+from wb_client import (
+    WBAPIError,
+    WBClient,
+    WBConfigurationError,
+    get_token_from_secrets,
+    load_config,
+)
 
 initialize_page(
     page_title="Wildberries Products",
@@ -19,10 +25,18 @@ initialize_page(
 with st.sidebar:
     st.header("Wildberries API")
     token = get_token_from_secrets()
+    config_preview = load_config()
     if token:
         st.success("WB_API_TOKEN найден в конфигурации")
     else:
         st.warning("WB_API_TOKEN не найден. См. инструкции ниже на странице")
+
+    st.caption(f"Базовый домен: {config_preview.base_url}")
+    if config_preview.content_base_url != config_preview.base_url:
+        st.caption(f"Контент-домен: {config_preview.content_base_url}")
+    legacy_warning = config_preview.legacy_base_warning()
+    if legacy_warning:
+        st.warning(legacy_warning)
 
 # Controls
 col1, col2, col3 = st.columns([1, 1, 2])
@@ -56,8 +70,21 @@ if connection_check:
         try:
             with st.spinner("Проверяем соединение с Wildberries..."):
                 client = WBClient(token=token)
-                client.check_connection()
-            st.success("Соединение с Wildberries установлено. Эндпоинты отвечают корректно.")
+                info = client.check_connection()
+            success_message = "Соединение с Wildberries установлено. Эндпоинты отвечают корректно."
+            auth_header = info.get("auth_header")
+            if auth_header:
+                success_message += f" Используется заголовок: {auth_header}."
+            st.success(success_message)
+            st.caption(
+                f"Базовый домен: {info.get('base_url')} | Контент-домен: {info.get('content_base_url')}"
+            )
+            response_keys = info.get("response_keys")
+            if response_keys:
+                st.caption("Ключи ответа: " + ", ".join(response_keys))
+            warning = info.get("warning")
+            if warning:
+                st.warning(warning)
         except WBConfigurationError as exc:
             st.error(str(exc))
         except WBAPIError as exc:

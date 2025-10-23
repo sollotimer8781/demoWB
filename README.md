@@ -76,15 +76,22 @@ DATABASE_URL=postgresql+psycopg2://user:password@host:5432/marketplace
 
 Создайте файл `.streamlit/secrets.toml`, используя шаблон:
 
+По умолчанию интеграция с Wildberries использует домены `https://marketplace-api.wildberries.ru` и `https://content-api.wildberries.ru`. При необходимости их можно переопределить в секции `[wb]`.
+
 ```toml
 # .streamlit/secrets.toml
 DATABASE_URL = "postgresql+psycopg2://user:password@host:5432/marketplace"
 OZON_CLIENT_ID = "your_client_id"
 OZON_API_KEY = "your_api_key"
+
+[wb]
 WB_API_TOKEN = "your_wb_api_token"
+WB_API_BASE = "https://marketplace-api.wildberries.ru"  # новое значение по умолчанию
+WB_CONTENT_API_BASE = "https://content-api.wildberries.ru"  # отдельный домен для контент-методов
 ```
 
 > Эти ключи необходимы для страниц Ozon и Wildberries. В облаке (Streamlit Cloud, Render, Railway) задайте их в настройках приложения.
+> Настройка `[wb]` поддерживает как вложенные ключи, так и плоские `WB_API_TOKEN`/`WB_API_BASE` в целях обратной совместимости. Домен `https://suppliers-api.wildberries.ru` считается устаревшим — при его использовании приложение покажет предупреждение.
 
 ## Страницы приложения
 
@@ -93,7 +100,7 @@ WB_API_TOKEN = "your_wb_api_token"
 | `streamlit_app.py` | Онбординг, статусы конфигурации, быстрые ссылки | — | — |
 | `pages/1_Products.py` | Каталог товаров с CRUD, импортом/экспортом, журналом | SQLAlchemy (`products`, `product_import_logs`) | `DATABASE_URL` (опционально) |
 | `pages/2_OZON_Products.py` | Синхронизация товаров через Ozon Seller API | `product_items` (SQLite) | `OZON_CLIENT_ID`, `OZON_API_KEY` |
-| `pages/WB_Products.py` | Просмотр и синхронизация ассортимента Wildberries | `product_items` (SQLite) | `WB_API_TOKEN` |
+| `pages/WB_Products.py` | Просмотр и синхронизация ассортимента Wildberries (в том числе проверка подключения) | `product_items` (SQLite) | `WB_API_TOKEN` (опционально `WB_API_BASE`, `WB_CONTENT_API_BASE`) |
 | `pages/SBIS_Products.py` | Импорт ассортимента SBIS из файлов | `product_items` (SQLite) | — |
 | `pages/Data_Workspace.py` | Коэффициенты, аналитика и массовые правки | `product_items` (SQLite) | — |
 
