@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import io
+import logging
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Dict, List, Mapping, Optional, Sequence, Set
 
 import pandas as pd
 import streamlit as st
 from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
 from app_layout import initialize_page
-from demowb.db import SessionLocal
+from demowb.db import SessionLocal, init_db
 from models import Product
 from product_service import (
     CUSTOM_PREFIX,
@@ -29,6 +32,8 @@ from product_service import (
 )
 from sync import sync_products
 
+
+logger = logging.getLogger(__name__)
 
 TEMPLATE_SAMPLE_ROWS = [
     {
@@ -335,6 +340,87 @@ def _build_column_config(definition: CustomFieldDefinition):
         return st.column_config.TextColumn(definition.name)
 
 
+def _extract_db_error_message(error: OperationalError) -> str:
+    origin = getattr(error, "orig", None)
+    if origin is None:
+        return str(error)
+    return str(origin)
+
+
+def _normalize_db_message(message: str) -> str:
+    return str(message).strip().lower()
+
+
+def _is_missing_table_error(normalized_message: str) -> bool:
+    return (
+        "no such table" in normalized_message
+        or "undefined table" in normalized_message
+        or (
+            "does not exist" in normalized_message
+            and ("table" in normalized_message or "relation" in normalized_message)
+        )
+    )
+
+
+def _is_locked_error(normalized_message: str) -> bool:
+    return "database is locked" in normalized_message or (
+        "locked" in normalized_message and "database" in normalized_message
+    )
+
+
+def _is_permission_error(normalized_message: str) -> bool:
+    return (
+        "readonly" in normalized_message
+        or "read-only" in normalized_message
+        or "read only" in normalized_message
+        or "attempt to write a readonly database" in normalized_message
+        or "permission denied" in normalized_message
+        or "not authorized" in normalized_message
+        or (
+            "unable to open database file" in normalized_message
+            and "readonly" in normalized_message
+        )
+    )
+
+
+def _handle_database_error(error: OperationalError, *, context: str) -> None:
+    message = _extract_db_error_message(error)
+    normalized = _normalize_db_message(message)
+    logger.exception("Ошибка базы данных при %s: %s", context, message)
+    if _is_missing_table_error(normalized):
+        st.warning("База данных каталога ещё не инициализирована. Выполняем автоматическую настройку…")
+        try:
+            init_db()
+        except Exception as init_exc:  # noqa: BLE001 - хотим показать проблему пользователю
+            logger.exception("Автоматическая инициализация базы данных завершилась ошибкой")
+            st.error(f"Не удалось автоматически инициализировать базу данных: {init_exc}")
+        else:
+            st.success("Схема базы данных создана. Перезагружаем страницу…")
+            st.experimental_rerun()
+    elif _is_locked_error(normalized):
+        st.error("База данных занята другим процессом. Повторите попытку через несколько секунд.")
+    elif _is_permission_error(normalized):
+        st.error(
+            "Нет доступа к файлу базы данных. Проверьте права и значение переменной `DATABASE_URL`."
+        )
+    else:
+        st.error(f"Ошибка базы данных: {message}")
+
+
+@contextmanager
+def _session_scope_ui(context: str):
+    try:
+        with SessionLocal() as session:
+            yield session
+    except OperationalError as exc:
+        _handle_database_error(exc, context=context)
+        st.stop()
+    except SQLAlchemyError as exc:
+        logger.exception("Ошибка SQLAlchemy при %s: %s", context, exc)
+        st.error("Не удалось выполнить операцию с базой данных. Подробности в журналах.")
+        st.stop()
+
+
 initialize_page(
     page_title="Управление товарами",
     page_icon="📦",
@@ -342,7 +428,7 @@ initialize_page(
     description="Каталог с импортом, экспортом и пользовательскими полями",
 )
 
-with SessionLocal() as session:
+with _session_scope_ui("загрузке настроек каталога") as session:
     custom_field_defs = load_custom_field_definitions(session)
     available_brands = get_available_brands(session)
     total_products = session.scalar(select(func.count(Product.id))) or 0
@@ -415,7 +501,7 @@ filters = ProductFilters(
 )
 visible_custom_fields = st.session_state["products_visible_custom_fields"]
 
-with SessionLocal() as session:
+with _session_scope_ui("загрузке данных каталога") as session:
     products_df, _ = load_products_dataframe(session, filters, custom_field_defs, visible_custom_fields)
 
 products_df = _prepare_editor_dataframe(products_df, custom_field_map, visible_custom_fields)
@@ -436,17 +522,32 @@ with catalog_tab:
     metrics_cols[2].metric("Отображаемых custom полей", len(visible_custom_fields))
 
     if st.button("Загрузить тестовые данные (WB mock)", key="products_sync_mock"):
-        with st.spinner("Загрузка мок-данных..."):
-            inserted, updated = sync_products()
-        if inserted or updated:
-            st.success(f"Импорт завершён. Добавлено: {inserted}, обновлено: {updated}.")
+        try:
+            with st.spinner("Загрузка мок-данных..."):
+                inserted, updated = sync_products()
+        except OperationalError as exc:
+            _handle_database_error(exc, context="загрузке демонстрационных данных")
+            st.stop()
+        except SQLAlchemyError as exc:
+            logger.exception("Ошибка SQLAlchemy при загрузке демонстрационных данных: %s", exc)
+            st.error("Не удалось загрузить демонстрационные данные. Подробности в журналах.")
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Не удалось загрузить демонстрационные данные")
+            st.error(f"Не удалось загрузить демонстрационные данные: {exc}")
         else:
-            st.info("Данные уже актуальны.")
-        st.experimental_rerun()
+            if inserted or updated:
+                st.success(f"Импорт завершён. Добавлено: {inserted}, обновлено: {updated}.")
+            else:
+                st.info("Данные уже актуальны.")
+            st.experimental_rerun()
 
     if products_df.empty:
         st.info("Нет данных для отображения. Загрузите их через импорт или используйте мок-данные.")
     else:
+        try:
+            custom_data_column = st.column_config.CodeColumn("Доп данные JSON", language="json")
+        except Exception:
+            custom_data_column = st.column_config.TextColumn("Доп данные JSON")
         column_config = {
             "id": st.column_config.NumberColumn("ID", disabled=True),
             "sku": st.column_config.TextColumn("SKU"),
@@ -489,7 +590,7 @@ with catalog_tab:
             "volume_l": st.column_config.NumberColumn("Литраж", format="%.3f", step=0.1),
             "barcode": st.column_config.TextColumn("Штрихкод"),
             "comments": st.column_config.TextColumn("Комменты"),
-            "custom_data": st.column_config.CodeColumn("Доп данные JSON", language="json"),
+            "custom_data": custom_data_column,
             "is_active": st.column_config.CheckboxColumn("Активен"),
             "created_at": st.column_config.DatetimeColumn("Создано", disabled=True, format="YYYY-MM-DD HH:mm"),
             "updated_at": st.column_config.DatetimeColumn("Обновлено", disabled=True, format="YYYY-MM-DD HH:mm"),
@@ -510,9 +611,14 @@ with catalog_tab:
         )
 
         if st.button("Сохранить изменения", type="primary", key="products_save"):
-            with SessionLocal() as session:
+            with _session_scope_ui("сохранении изменений каталога") as session:
                 definitions_for_save = load_custom_field_definitions(session)
-                _, original_products = load_products_dataframe(session, filters, definitions_for_save, visible_custom_fields)
+                _, original_products = load_products_dataframe(
+                    session,
+                    filters,
+                    definitions_for_save,
+                    visible_custom_fields,
+                )
                 save_result = save_products_from_dataframe(
                     session,
                     editable_df,
@@ -686,7 +792,7 @@ with catalog_tab:
                 if not selected_ids:
                     st.warning("Выберите хотя бы одну запись для изменения.")
                 else:
-                    with SessionLocal() as session:
+                    with _session_scope_ui("массовом обновлении каталога") as session:
                         updated_count, error_message = bulk_update_field(
                             session,
                             selected_ids,
@@ -868,7 +974,7 @@ with import_tab:
                     st.error(f"Повторяющиеся ключи custom_fields: {', '.join(sorted(duplicates))}")
                 else:
                     try:
-                        with SessionLocal() as session:
+                        with _session_scope_ui("импорте товаров") as session:
                             definitions_for_import = load_custom_field_definitions(session)
                             import_result = import_products_from_dataframe(
                                 session,
@@ -894,6 +1000,7 @@ with import_tab:
                             )
                         st.experimental_rerun()
                     except Exception as exc:  # noqa: BLE001
+                        logger.exception("Ошибка при импорте товаров")
                         st.error(f"Ошибка при импорте: {exc}")
     else:
         st.info("Загрузите файл или используйте шаблон для подготовки данных к импорту.")
@@ -941,7 +1048,7 @@ with export_tab:
             brand=None if export_brand == "Все бренды" else export_brand,
             active_only=export_active_only,
         )
-        with SessionLocal() as session:
+        with _session_scope_ui("экспорте каталога") as session:
             export_df = export_products_dataframe(session, export_filters, custom_field_defs, export_custom_fields)
         if export_df.empty:
             st.info("Нет данных для экспорта по заданным фильтрам.")
@@ -968,7 +1075,7 @@ with export_tab:
 
 with logs_tab:
     st.subheader("Журнал импортов")
-    with SessionLocal() as session:
+    with _session_scope_ui("загрузке журнала импортов") as session:
         logs_df = fetch_import_logs(session, limit=50)
     if logs_df.empty:
         st.info("Импортов ещё не было.")
