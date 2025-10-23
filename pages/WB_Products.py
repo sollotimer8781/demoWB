@@ -1,4 +1,3 @@
-import json
 from typing import List
 
 import pandas as pd
@@ -8,7 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app_layout import initialize_page
 from demowb.db import init_db
 from sync_wb import load_wb_products_df, sync_wb
-from wb_client import get_token_from_secrets
+from wb_client import WBAPIError, WBClient, WBConfigurationError, get_token_from_secrets
 
 initialize_page(
     page_title="Wildberries Products",
@@ -21,7 +20,7 @@ with st.sidebar:
     st.header("Wildberries API")
     token = get_token_from_secrets()
     if token:
-        st.success("WB_API_TOKEN найден в secrets")
+        st.success("WB_API_TOKEN найден в конфигурации")
     else:
         st.warning("WB_API_TOKEN не найден. См. инструкции ниже на странице")
 
@@ -31,19 +30,40 @@ with col1:
     do_sync = st.button("Sync now", type="primary", use_container_width=True)
 with col2:
     refresh = st.button("Refresh", use_container_width=True)
+with col3:
+    connection_check = st.button("Проверить соединение", use_container_width=True)
 
 if do_sync:
     if not token:
-        st.error("WB_API_TOKEN отсутствует в secrets. Синхронизация невозможна.")
+        st.error("WB_API_TOKEN отсутствует. Синхронизация невозможна до настройки ключа.")
     else:
         with st.spinner("Синхронизация с Wildberries..."):
             try:
                 inserted, updated = sync_wb()
-                # clear cache to show fresh data
                 load_wb_products_df.clear()
                 st.success(f"Синхронизация завершена. Добавлено: {inserted}, обновлено: {updated}.")
-            except Exception as e:
-                st.error(f"Ошибка синхронизации: {e}")
+            except WBConfigurationError as exc:
+                st.error(str(exc))
+            except WBAPIError as exc:
+                st.error(f"Ошибка синхронизации: {exc}")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Неожиданная ошибка синхронизации: {exc}")
+
+if connection_check:
+    if not token:
+        st.error("WB_API_TOKEN отсутствует. Проверьте настройки и повторите попытку.")
+    else:
+        try:
+            with st.spinner("Проверяем соединение с Wildberries..."):
+                client = WBClient(token=token)
+                client.check_connection()
+            st.success("Соединение с Wildberries установлено. Эндпоинты отвечают корректно.")
+        except WBConfigurationError as exc:
+            st.error(str(exc))
+        except WBAPIError as exc:
+            st.error(f"Ошибка проверки соединения: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Неожиданная ошибка при проверке соединения: {exc}")
 
 if refresh:
     load_wb_products_df.clear()
