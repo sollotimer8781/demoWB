@@ -131,6 +131,37 @@ TEMPLATE_SAMPLE_ROWS = [
     },
 ]
 
+TEMPLATE_COLUMN_LABELS = {
+    "sku": "SKU",
+    "seller_sku": "Артикул продавца",
+    "wb_sku": "Артикул WB",
+    "nm_id": "NM ID",
+    "title": "Название",
+    "brand": "Бренд",
+    "category": "Категория",
+    "price_src": "Текущая цена",
+    "seller_discount_pct": "Скидка, %",
+    "price": "Итоговая цена (расчёт)",
+    "price_final": "Цена со скидкой (расчёт)",
+    "stock": "Остаток общий (расчёт)",
+    "stock_wb": "Остатки WB",
+    "stock_seller": "Остатки продавца",
+    "barcode": "Штрихкод",
+    "is_active": "Активен",
+    "product_cost": "Себик",
+    "shipping_cost": "Транспортировка",
+    "logistics_back_cost": "Логистика возврата",
+    "warehouse_coeff": "Коэфф. склада",
+    "turnover_days": "Оборачиваемость, дни",
+    "weight_kg": "Вес с упаковкой (кг)",
+    "package_l_cm": "Длина упаковки, см",
+    "package_w_cm": "Ширина упаковки, см",
+    "package_h_cm": "Высота упаковки, см",
+    "volume_l": "Литраж",
+    "comments": "Комменты",
+    "custom_data": "Доп данные JSON",
+}
+
 
 def _build_template_dataframe(custom_fields: Sequence[CustomFieldDefinition]) -> pd.DataFrame:
     rows = [row.copy() for row in TEMPLATE_SAMPLE_ROWS]
@@ -144,7 +175,14 @@ def _build_template_dataframe(custom_fields: Sequence[CustomFieldDefinition]) ->
                 row[field.key] = False
             else:
                 row[field.key] = ""
-    return pd.DataFrame(rows)
+    dataframe = pd.DataFrame(rows)
+    base_columns = [column for column in TEMPLATE_COLUMN_LABELS if column in dataframe.columns]
+    extra_columns = [column for column in dataframe.columns if column not in base_columns]
+    ordered_columns = base_columns + extra_columns
+    dataframe = dataframe[ordered_columns]
+    rename_map = {column: TEMPLATE_COLUMN_LABELS[column] for column in base_columns}
+    dataframe = dataframe.rename(columns=rename_map)
+    return dataframe
 
 
 def _read_uploaded_file(uploaded_file) -> pd.DataFrame:
@@ -418,21 +456,26 @@ with catalog_tab:
             "title": st.column_config.TextColumn("Название"),
             "brand": st.column_config.TextColumn("Бренд"),
             "category": st.column_config.TextColumn("Категория"),
-            "price_src": st.column_config.NumberColumn("Цена на витрине", format="%.2f ₽", step=1.0),
-            "seller_discount_pct": st.column_config.NumberColumn("Скидка продавца, %", format="%.2f %", step=0.5),
+            "price_src": st.column_config.NumberColumn("Текущая цена", format="%.2f ₽", step=1.0),
+            "seller_discount_pct": st.column_config.NumberColumn("Скидка, %", format="%.2f %", step=0.5),
             "price": st.column_config.NumberColumn(
-                "Итоговая цена",
+                "Итоговая цена (расчёт)",
                 format="%.2f ₽",
                 disabled=True,
-                help="Рассчитывается из цены на витрине и скидки",
+                help="Рассчитывается из «Текущая цена» и «Скидка, %».",
             ),
-            "price_final": st.column_config.NumberColumn("Цена со скидкой", format="%.2f ₽", disabled=True),
-            "stock": st.column_config.NumberColumn("Остаток", step=1, help="Количество на складе"),
-            "stock_wb": st.column_config.NumberColumn("Остаток WB", step=1),
-            "stock_seller": st.column_config.NumberColumn("Остаток продавца", step=1),
+            "price_final": st.column_config.NumberColumn("Цена со скидкой (расчёт)", format="%.2f ₽", disabled=True),
+            "stock": st.column_config.NumberColumn(
+                "Остаток общий (расчёт)",
+                step=1,
+                disabled=True,
+                help="Сумма «Остатки WB» и «Остатки продавца».",
+            ),
+            "stock_wb": st.column_config.NumberColumn("Остатки WB", step=1),
+            "stock_seller": st.column_config.NumberColumn("Остатки продавца", step=1),
             "turnover_days": st.column_config.NumberColumn("Оборачиваемость, дни", format="%.1f"),
-            "product_cost": st.column_config.NumberColumn("Себестоимость", format="%.2f ₽", step=1.0),
-            "shipping_cost": st.column_config.NumberColumn("Доставка до склада", format="%.2f ₽", step=1.0),
+            "product_cost": st.column_config.NumberColumn("Себик", format="%.2f ₽", step=1.0),
+            "shipping_cost": st.column_config.NumberColumn("Транспортировка", format="%.2f ₽", step=1.0),
             "logistics_back_cost": st.column_config.NumberColumn("Логистика возврата", format="%.2f ₽", step=1.0),
             "warehouse_coeff": st.column_config.NumberColumn("Коэфф. склада", format="%.2f ₽", step=1.0),
             "commission": st.column_config.NumberColumn("Комиссия", format="%.2f ₽", disabled=True),
@@ -443,10 +486,10 @@ with catalog_tab:
             "package_l_cm": st.column_config.NumberColumn("Длина упаковки, см", format="%.1f", step=0.5),
             "package_w_cm": st.column_config.NumberColumn("Ширина упаковки, см", format="%.1f", step=0.5),
             "package_h_cm": st.column_config.NumberColumn("Высота упаковки, см", format="%.1f", step=0.5),
-            "volume_l": st.column_config.NumberColumn("Объём, л", format="%.3f", step=0.1),
+            "volume_l": st.column_config.NumberColumn("Литраж", format="%.3f", step=0.1),
             "barcode": st.column_config.TextColumn("Штрихкод"),
-            "comments": st.column_config.TextColumn("Комментарии"),
-            "custom_data": st.column_config.CodeColumn("custom_data (JSON)", language="json"),
+            "comments": st.column_config.TextColumn("Комменты"),
+            "custom_data": st.column_config.CodeColumn("Доп данные JSON", language="json"),
             "is_active": st.column_config.CheckboxColumn("Активен"),
             "created_at": st.column_config.DatetimeColumn("Создано", disabled=True, format="YYYY-MM-DD HH:mm"),
             "updated_at": st.column_config.DatetimeColumn("Обновлено", disabled=True, format="YYYY-MM-DD HH:mm"),
@@ -735,27 +778,27 @@ with import_tab:
                 ("title", "Название *"),
                 ("brand", "Бренд"),
                 ("category", "Категория"),
-                ("price_src", "Цена на витрине"),
-                ("seller_discount_pct", "Скидка продавца, %"),
-                ("price", "Цена (legacy)"),
-                ("price_final", "Цена со скидкой (расчет)"),
-                ("product_cost", "Себестоимость"),
-                ("shipping_cost", "Доставка до склада"),
+                ("price_src", "Текущая цена"),
+                ("seller_discount_pct", "Скидка, %"),
+                ("price", "Итоговая цена (расчёт, legacy)"),
+                ("price_final", "Цена со скидкой (расчёт)"),
+                ("product_cost", "Себик"),
+                ("shipping_cost", "Транспортировка"),
                 ("logistics_back_cost", "Логистика возврата"),
                 ("warehouse_coeff", "Коэфф. склада"),
-                ("stock", "Остаток общий"),
-                ("stock_wb", "Остаток WB"),
-                ("stock_seller", "Остаток продавца"),
+                ("stock", "Остаток общий (расчёт)"),
+                ("stock_wb", "Остатки WB"),
+                ("stock_seller", "Остатки продавца"),
                 ("turnover_days", "Оборачиваемость, дни"),
-                ("weight_kg", "Вес, кг"),
+                ("weight_kg", "Вес с упаковкой (кг)"),
                 ("package_l_cm", "Длина упаковки, см"),
                 ("package_w_cm", "Ширина упаковки, см"),
                 ("package_h_cm", "Высота упаковки, см"),
-                ("volume_l", "Объём, л"),
+                ("volume_l", "Литраж"),
                 ("barcode", "Штрихкод"),
-                ("comments", "Комментарии"),
+                ("comments", "Комменты"),
                 ("is_active", "Активен"),
-                ("custom_data", "Доп. данные (JSON)"),
+                ("custom_data", "Доп данные JSON"),
             ]
             for field, label in field_labels:
                 options = [sentinel] + columns

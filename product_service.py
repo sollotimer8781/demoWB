@@ -73,11 +73,16 @@ IMPORT_HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
     "category": ("category", "категория", "категория товара"),
     "price_src": ("price_src", "текущая цена", "цена", "цена на витрине"),
     "seller_discount_pct": ("seller_discount_pct", "скидка", "скидка продавца", "дисконт", "скидка, %"),
-    "price": ("price", "итоговая цена", "price_final", "цена со скидкой"),
-    "stock": ("stock", "остаток", "количество"),
+    "price": ("price", "итоговая цена", "итоговая цена расчет", "price_final", "цена со скидкой"),
+    "stock": ("stock", "остаток", "остаток общий", "остаток общий расчет", "количество"),
     "stock_wb": ("stock_wb", "остатки wb", "остаток wb", "wb stock"),
     "stock_seller": ("stock_seller", "остатки продавца", "seller stock"),
-    "turnover_days": ("turnover_days", "оборачиваемость", "дни оборачиваемости"),
+    "turnover_days": (
+        "turnover_days",
+        "оборачиваемость",
+        "дни оборачиваемости",
+        "оборачиваемость дни",
+    ),
     "product_cost": ("product_cost", "себик", "себестоимость", "cost"),
     "shipping_cost": ("shipping_cost", "транспортировка", "доставка", "shipping"),
     "logistics_back_cost": (
@@ -86,18 +91,40 @@ IMPORT_HEADER_ALIASES: Dict[str, Tuple[str, ...]] = {
         "возврат",
         "стоимость возврата",
     ),
-    "warehouse_coeff": ("warehouse_coeff", "кофф склада", "коэф склада", "складской коэффициент"),
+    "warehouse_coeff": (
+        "warehouse_coeff",
+        "кофф склада",
+        "коэф склада",
+        "коэфф склада",
+        "коэфф. склада",
+        "складской коэффициент",
+    ),
     "weight_kg": ("weight_kg", "вес", "вес с упаковкой", "вес с упаковкой (кг)"),
-    "package_l_cm": ("package_l_cm", "длина упаковки", "длина, см"),
-    "package_w_cm": ("package_w_cm", "ширина упаковки", "ширина, см"),
-    "package_h_cm": ("package_h_cm", "высота упаковки", "высота, см"),
-    "volume_l": ("volume_l", "литраж", "объем", "объем, л"),
+    "package_l_cm": ("package_l_cm", "длина упаковки", "длина, см", "длина упаковки см"),
+    "package_w_cm": ("package_w_cm", "ширина упаковки", "ширина, см", "ширина упаковки см"),
+    "package_h_cm": ("package_h_cm", "высота упаковки", "высота, см", "высота упаковки см"),
+    "volume_l": ("volume_l", "литраж", "литраж литраж", "объем", "объем, л"),
     "barcode": ("barcode", "штрихкод", "штрих-код"),
     "comments": ("comments", "комменты", "комментарии", "примечания"),
-    "custom_data": ("custom_data", "доп_данные", "extra", "json"),
+    "is_active": ("is_active", "активен", "активный", "статус"),
+    "custom_data": (
+        "custom_data",
+        "custom data",
+        "доп данные",
+        "доп данные json",
+        "доп_данные",
+        "extra",
+        "json",
+    ),
 }
 COMPUTED_IMPORT_ALIASES: Dict[str, Tuple[str, ...]] = {
-    "price_final": ("текущая цена со скид.", "текущая цена со скидкой", "итоговая цена"),
+    "price_final": (
+        "текущая цена со скид.",
+        "текущая цена со скидкой",
+        "цена со скидкой (расчет)",
+        "цена со скидкой расчет",
+        "итоговая цена",
+    ),
 }
 
 
@@ -107,7 +134,7 @@ def normalize_header_label(label: object) -> str:
     text = str(label).strip().lower()
     text = text.replace("\u00a0", " ")
     text = text.replace("ё", "е")
-    text = re.sub(r"[\\/|:;,+%()\[\]{}]+", " ", text)
+    text = re.sub(r"[\.\\/|:;,+%()\[\]{}\"'“”]+", " ", text)
     text = re.sub(r"\s+", " ", text)
     text = text.strip()
     normalized = text.replace(" ", "_")
