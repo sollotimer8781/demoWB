@@ -3,7 +3,12 @@ from typing import Dict, List, Tuple
 import streamlit as st
 
 from product_repository import load_products_df, upsert_products
-from wb_client import WBClient, get_token_from_secrets, normalize_card_to_product
+from wb_client import (
+    WBClient,
+    WBConfigurationError,
+    get_token_from_secrets,
+    normalize_card_to_product,
+)
 
 
 def upsert_products_wb(products: List[Dict]) -> Tuple[int, int]:
@@ -33,7 +38,9 @@ def upsert_products_wb(products: List[Dict]) -> Tuple[int, int]:
 def sync_wb() -> Tuple[int, int]:
     token = get_token_from_secrets()
     if not token:
-        raise RuntimeError("WB_API_TOKEN is not configured in Streamlit secrets")
+        raise WBConfigurationError(
+            "WB_API_TOKEN отсутствует. Добавьте ключ в .streamlit/secrets.toml или переменные окружения."
+        )
 
     client = WBClient(token=token)
     cards = client.fetch_all_cards(limit=100)
