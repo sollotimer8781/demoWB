@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import SQLAlchemyError
 
-from app_layout import APP_PAGES, initialize_page
+from app_layout import APP_PAGES, get_database_status_message, get_wb_connection_status, initialize_page
 from demowb.db import SessionLocal, get_database_url
 from demowb.ui import inject_css
 from models import Product, ProductImportLog
@@ -32,8 +32,9 @@ if not css_applied:
 st.markdown(
     """
     ### 🛍️ Добро пожаловать!
-    Используйте навигацию выше, чтобы перейти к управлению каталогом товаров, синхронизации с маркетплейсами
-    или рабочему месту коэффициентов. На этой странице собраны ключевые статусы и рекомендации для запуска.
+    Используйте навигацию выше, чтобы перейти к работе с каталогом и синхронизации Wildberries.
+    Экспериментальные разделы временно скрыты, чтобы ускорить запуск WB-функций.
+    На этой странице собраны ключевые статусы и рекомендации для старта.
     """
 )
 
@@ -78,12 +79,47 @@ def _format_database_label(url: str) -> str:
     return f"{backend}://{host}{port}/{db_name}".rstrip("/")
 
 
+def _render_status_message(kind: str, message: str) -> None:
+    if kind == "success":
+        st.success(message)
+    elif kind == "warning":
+        st.warning(message)
+    elif kind == "error":
+        st.error(message)
+    else:
+        st.info(message)
+
+
 metrics = _load_catalog_metrics()
 if metrics:
     col_products, col_imports = st.columns(2)
     col_products.metric("Товаров в каталоге", f"{metrics['products']:,}".replace(",", " " ))
     col_imports.metric("Импортов товаров", f"{metrics['imports']:,}".replace(",", " " ))
 
+st.divider()
+
+st.subheader("📋 Статусы интеграции")
+status_cols = st.columns(2)
+with status_cols[0]:
+    st.markdown("#### База данных")
+    db_status = get_database_status_message()
+    if db_status:
+        kind, message = db_status
+        _render_status_message(kind, message)
+    else:
+        st.info("Статус появится после инициализации базы данных.")
+with status_cols[1]:
+    st.markdown("#### Wildberries API")
+    wb_status = get_wb_connection_status()
+    if wb_status:
+        kind, message = wb_status
+        _render_status_message(kind, message)
+    else:
+        token_present = bool(_resolve_setting("WB_API_TOKEN"))
+        if not token_present:
+            st.warning("WB_API_TOKEN не найден. Добавьте токен в .streamlit/secrets.toml или переменные окружения.")
+        else:
+            st.info("Используйте кнопку «Проверить соединение» в боковой панели, чтобы получить статус API.")
 st.divider()
 
 st.subheader("⚙️ Конфигурация и окружение")
@@ -98,28 +134,20 @@ if database_url.startswith("sqlite"):
 else:
     st.success(f"Подключено внешнее хранилище: `{database_label}`")
 
-settings = {
-    "DATABASE_URL": bool(_resolve_setting("DATABASE_URL")),
-    "OZON_CLIENT_ID": bool(_resolve_setting("OZON_CLIENT_ID")),
-    "OZON_API_KEY": bool(_resolve_setting("OZON_API_KEY")),
-    "WB_API_TOKEN": bool(_resolve_setting("WB_API_TOKEN")),
-}
-
-missing_settings = [key for key, configured in settings.items() if not configured and key != "DATABASE_URL"]
-if missing_settings:
-    st.warning(
-        "Не заполнены ключевые параметры: " + ", ".join(missing_settings) +
-        ". Добавьте их в `.streamlit/secrets.toml` или через сигналы окружения."
-    )
+token_present = bool(_resolve_setting("WB_API_TOKEN"))
+if token_present:
+    st.success("WB_API_TOKEN найден. Синхронизация с Wildberries доступна.")
 else:
-    st.success("API ключи настроены.")
+    st.warning(
+        "WB_API_TOKEN не найден. Добавьте токен в `.streamlit/secrets.toml` или переменные окружения для работы с Wildberries."
+    )
 
-with st.expander("Как настроить .env и секреты", expanded=bool(missing_settings)):
+with st.expander("Как настроить .env и секреты", expanded=not token_present):
     st.markdown(
         """
-        1. Скопируйте шаблоны: `cp .streamlit/secrets.toml.example .streamlit/secrets.toml`.
-        2. Укажите `DATABASE_URL`, если требуется внешняя БД (PostgreSQL, MySQL и т.д.).
-        3. Добавьте ключи `OZON_CLIENT_ID`, `OZON_API_KEY`, `WB_API_TOKEN` для работы страниц маркетплейсов.
+        1. Скопируйте шаблон: `cp .streamlit/secrets.toml.example .streamlit/secrets.toml`.
+        2. При необходимости укажите `DATABASE_URL` для подключения внешней БД (PostgreSQL, MySQL и др.).
+        3. Добавьте `WB_API_TOKEN` — личный токен продавца из кабинета Wildberries.
         4. Перезапустите Streamlit после изменений.
         """
     )
@@ -131,10 +159,8 @@ DATABASE_URL=postgresql+psycopg2://user:password@host:5432/marketplace
     )
     st.code(
         """# .streamlit/secrets.toml
-DATABASE_URL = "postgresql+psycopg2://user:password@host:5432/marketplace"
-OZON_CLIENT_ID = "your_client_id"
-OZON_API_KEY = "your_api_key"
 WB_API_TOKEN = "your_wb_api_token"
+# DATABASE_URL = "postgresql+psycopg2://user:password@host:5432/marketplace"
 """,
         language="toml",
     )

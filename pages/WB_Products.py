@@ -5,9 +5,8 @@ import streamlit as st
 from sqlalchemy.exc import SQLAlchemyError
 
 from app_layout import initialize_page
-from demowb.db import init_db
 from sync_wb import load_wb_products_df, sync_wb
-from wb_client import WBAPIError, WBClient, WBConfigurationError, get_token_from_secrets
+from wb_client import WBAPIError, WBConfigurationError, get_token_from_secrets
 
 initialize_page(
     page_title="Wildberries Products",
@@ -16,57 +15,49 @@ initialize_page(
     description="Просмотр ассортимента и синхронизация с Wildberries API",
 )
 
-with st.sidebar:
-    st.header("Wildberries API")
-    token = get_token_from_secrets()
-    if token:
-        st.success("WB_API_TOKEN найден в конфигурации")
-    else:
-        st.warning("WB_API_TOKEN не найден. См. инструкции ниже на странице")
+token = get_token_from_secrets()
 
 # Controls
-col1, col2, col3 = st.columns([1, 1, 2])
-with col1:
+col_sync, col_refresh = st.columns([1, 1])
+with col_sync:
     do_sync = st.button("Sync now", type="primary", use_container_width=True)
-with col2:
+with col_refresh:
     refresh = st.button("Refresh", use_container_width=True)
-with col3:
-    connection_check = st.button("Проверить соединение", use_container_width=True)
 
 if do_sync:
+    status = st.status("Синхронизация с Wildberries", expanded=True)
     if not token:
-        st.error("WB_API_TOKEN отсутствует. Синхронизация невозможна до настройки ключа.")
+        status.update(
+            label="WB_API_TOKEN отсутствует",
+            state="error",
+            expanded=True,
+        )
+        status.write(
+            "Добавьте токен в `.streamlit/secrets.toml` или переменные окружения, чтобы синхронизировать товары."
+        )
     else:
-        with st.spinner("Синхронизация с Wildberries..."):
-            try:
-                inserted, updated = sync_wb()
-                load_wb_products_df.clear()
-                st.success(f"Синхронизация завершена. Добавлено: {inserted}, обновлено: {updated}.")
-            except WBConfigurationError as exc:
-                st.error(str(exc))
-            except WBAPIError as exc:
-                st.error(f"Ошибка синхронизации: {exc}")
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"Неожиданная ошибка синхронизации: {exc}")
-
-if connection_check:
-    if not token:
-        st.error("WB_API_TOKEN отсутствует. Проверьте настройки и повторите попытку.")
-    else:
+        status.write("Получаем карточки Wildberries…")
         try:
-            with st.spinner("Проверяем соединение с Wildberries..."):
-                client = WBClient(token=token)
-                client.check_connection()
-            st.success("Соединение с Wildberries установлено. Эндпоинты отвечают корректно.")
+            inserted, updated = sync_wb()
         except WBConfigurationError as exc:
-            st.error(str(exc))
+            status.update(label="Ошибка конфигурации", state="error", expanded=True)
+            status.write(str(exc))
         except WBAPIError as exc:
-            st.error(f"Ошибка проверки соединения: {exc}")
+            status.update(label="Ошибка синхронизации", state="error", expanded=True)
+            status.write(str(exc))
         except Exception as exc:  # noqa: BLE001
-            st.error(f"Неожиданная ошибка при проверке соединения: {exc}")
+            status.update(label="Неожиданная ошибка", state="error", expanded=True)
+            status.write(str(exc))
+        else:
+            load_wb_products_df.clear()
+            status.update(label="Синхронизация завершена", state="complete", expanded=True)
+            status.write(f"Добавлено: {inserted}, обновлено: {updated}.")
+            st.success(f"Синхронизация завершена. Добавлено: {inserted}, обновлено: {updated}.")
 
 if refresh:
     load_wb_products_df.clear()
+
+st.caption("Статус соединения и управление базой данных расположены в боковой панели.")
 
 # Data loading (cached)
 try:
@@ -75,12 +66,7 @@ except SQLAlchemyError as exc:  # noqa: BLE001
     df = None
     load_wb_products_df.clear()
     st.error(f"Не удалось обратиться к базе данных Wildberries: {exc}")
-    if st.button("Инициализировать БД", type="primary"):
-        try:
-            init_db()
-            st.success("База данных инициализирована. Обновите страницу или нажмите 'Refresh'.")
-        except Exception as init_exc:  # noqa: BLE001
-            st.error(f"Ошибка инициализации базы: {init_exc}")
+    st.info("Используйте кнопку «Инициализировать БД» в боковой панели и обновите страницу после завершения.")
     st.stop()
 except Exception as exc:  # noqa: BLE001
     df = None
@@ -90,11 +76,11 @@ except Exception as exc:  # noqa: BLE001
 if df is None or df.empty:
     if not token:
         st.info(
-            "Не найден WB_API_TOKEN. Добавьте секрет в .streamlit/secrets.toml:\n\n"
-            "[secrets]\nWB_API_TOKEN='ваш_токен_из_WB'\n\n"
-            "Либо установите переменную окружения STREAMLIT_SECRETS с соответствующим JSON.")
+            "WB_API_TOKEN не найден. Добавьте токен в `.streamlit/secrets.toml` или переменные окружения."
+            " Следите за статусом в боковой панели приложения."
+        )
     else:
-        st.info("Нет данных для отображения. Нажмите 'Sync now' для загрузки товаров из WB.")
+        st.info("Нет данных для отображения. Нажмите «Sync now», чтобы загрузить ассортимент из Wildberries.")
     st.stop()
 
 # Filters
