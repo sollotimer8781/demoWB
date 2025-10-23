@@ -122,6 +122,116 @@ def _split_image_values(raw: Any) -> List[str]:
     return result
 
 
+FIELD_LABELS = {
+    "title": "Название (title)",
+    "brand": "Бренд (brand)",
+    "price": "Цена (price)",
+    "stock": "Остаток (stock)",
+    "product_id": "Product ID",
+    "offer_id": "Offer ID",
+    "sku": "SKU",
+    "nm_id": "NM ID",
+}
+FIELD_ORDER = ["title", "brand", "price", "stock", "product_id", "offer_id", "sku", "nm_id"]
+MANDATORY_MAPPING_FIELDS = {"title"}
+MANDATORY_ROW_FIELDS = {"title"}
+NUMERIC_FLOAT_FIELDS = {"price"}
+NUMERIC_INT_FIELDS = {"stock", "nm_id"}
+TEXT_FIELDS = {"title", "brand", "product_id", "offer_id", "sku"}
+SAMPLE_NOT_SELECTED = "— не выбран —"
+FIELD_NOT_USED_OPTION = "— не использовать —"
+MAX_LOG_ENTRIES = 200
+
+
+def _append_import_log(message: str) -> None:
+    timestamp = datetime.now().strftime("%H:%M:%S")
+    logs = st.session_state.setdefault("sbis_import_log", [])
+    logs.append(f"[{timestamp}] {message}")
+    if len(logs) > MAX_LOG_ENTRIES:
+        del logs[:-MAX_LOG_ENTRIES]
+
+
+def _reset_import_state() -> None:
+    for key in [
+        "sbis_import_df",
+        "sbis_import_source_name",
+        "sbis_key_column",
+        "sbis_external_key_type",
+        "sbis_image_columns",
+    ]:
+        st.session_state.pop(key, None)
+    for key in list(st.session_state.keys()):
+        if key.startswith("sbis_map_"):
+            st.session_state.pop(key)
+    if "sbis_sample_select" in st.session_state:
+        st.session_state["sbis_sample_select"] = SAMPLE_NOT_SELECTED
+
+
+def _coerce_float_value(value: Any) -> Tuple[Optional[float], Optional[str]]:
+    if value is None:
+        return None, None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        result = float(value)
+        if math.isnan(result) or math.isinf(result):
+            return None, "имеет недопустимое числовое значение"
+        return result, None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None, None
+        normalized = stripped.replace(" ", "").replace(",", ".")
+        try:
+            result = float(normalized)
+        except ValueError:
+            return None, f"значение «{value}» не удалось преобразовать в число"
+        if math.isnan(result) or math.isinf(result):
+            return None, "имеет недопустимое числовое значение"
+        return result, None
+    return None, f"значение {value!r} не удалось преобразовать в число"
+
+
+def _coerce_int_value(value: Any) -> Tuple[Optional[int], Optional[str]]:
+    if value is None:
+        return None, None
+    if isinstance(value, bool):
+        return int(value), None
+    if isinstance(value, int):
+        return value, None
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None, "имеет недопустимое целое значение"
+        if value.is_integer():
+            return int(value), None
+        return None, f"значение {value} не является целым числом"
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None, None
+        normalized = stripped.replace(" ", "")
+        try:
+            float_value = float(normalized.replace(",", "."))
+        except ValueError:
+            return None, f"значение «{value}» не удалось преобразовать в целое число"
+        if not float_value.is_integer():
+            return None, f"значение «{value}» не является целым числом"
+        return int(float_value), None
+    return None, f"значение {value!r} не удалось преобразовать в целое число"
+
+
+def _cast_field_value(field: str, value: Any) -> Tuple[Any, Optional[str]]:
+    normalized = _normalize_value(value)
+    if normalized is None:
+        return None, None
+    if field in NUMERIC_FLOAT_FIELDS:
+        return _coerce_float_value(normalized)
+    if field in NUMERIC_INT_FIELDS:
+        return _coerce_int_value(normalized)
+    if field in TEXT_FIELDS:
+        text = str(normalized).strip()
+        return (text or None), None
+    return normalized, None
+
+
 def _prepare_records(
     df: pd.DataFrame,
     key_column: str,
@@ -133,23 +243,31 @@ def _prepare_records(
     errors: List[str] = []
     duplicate_keys: List[str] = []
     seen_keys: Dict[str, int] = {}
+
     used_columns = {key_column}
-    for col in field_mapping.values():
-        if col:
-            used_columns.add(col)
-    for col in image_columns:
-        used_columns.add(col)
+    used_columns.update(col for col in field_mapping.values() if col)
+    used_columns.update(image_columns)
+
+    missing_columns = [col for col in used_columns if col not in df.columns]
+    if missing_columns:
+        errors.append(
+            "В таблице отсутствуют необходимые столбцы: "
+            + ", ".join(sorted(missing_columns))
+        )
+        return [], errors, []
 
     for idx, row in df.iterrows():
+        row_number = idx + 2
         raw_key = row.get(key_column)
         normalized_key = _normalize_value(raw_key)
         if normalized_key is None:
-            errors.append(f"Строка {idx + 2}: внешний ключ пустой")
+            errors.append(f"Строка {row_number}: внешний ключ пустой")
             continue
         external_key = str(normalized_key).strip()
         if not external_key:
-            errors.append(f"Строка {idx + 2}: внешний ключ пустой")
+            errors.append(f"Строка {row_number}: внешний ключ пустой")
             continue
+
         seen_count = seen_keys.get(external_key, 0)
         if seen_count:
             duplicate_keys.append(external_key)
@@ -164,18 +282,28 @@ def _prepare_records(
         }
 
         for field, column in field_mapping.items():
-            if not column:
+            if not column or column not in df.columns:
                 continue
             value = row.get(column)
-            normalized = _normalize_value(value)
-            if normalized is None:
+            converted, error_message = _cast_field_value(field, value)
+            if error_message:
+                label = FIELD_LABELS.get(field, field)
+                errors.append(f"Строка {row_number}: {label} — {error_message}")
                 continue
-            if field in {"title", "brand", "product_id", "offer_id", "sku"}:
-                text = str(normalized).strip()
-                if text:
-                    record[field] = text
+            if converted is None:
                 continue
-            record[field] = normalized
+            record[field] = converted
+
+        missing_required_values = [
+            FIELD_LABELS.get(field, field)
+            for field in MANDATORY_ROW_FIELDS
+            if field_mapping.get(field) and not record.get(field)
+        ]
+        if missing_required_values:
+            errors.append(
+                f"Строка {row_number}: отсутствуют значения для обязательных полей: {', '.join(missing_required_values)}"
+            )
+            continue
 
         if image_columns:
             urls: List[str] = []
@@ -192,10 +320,10 @@ def _prepare_records(
         for column in df.columns:
             if column in used_columns:
                 continue
-            normalized = _normalize_value(row.get(column))
-            if normalized is None:
+            normalized_extra = _normalize_value(row.get(column))
+            if normalized_extra is None:
                 continue
-            extra[column] = normalized
+            extra[column] = normalized_extra
         if extra:
             record["extra"] = extra
 
@@ -240,6 +368,8 @@ def load_sbis_products_df():
 
 if "sbis_import_feedback" not in st.session_state:
     st.session_state["sbis_import_feedback"] = None
+if "sbis_import_log" not in st.session_state:
+    st.session_state["sbis_import_log"] = []
 
 
 with st.sidebar:
@@ -247,6 +377,14 @@ with st.sidebar:
     st.caption(
         "Импорт через Excel/CSV доступен сейчас. Интеграция по API будет добавлена позже — интерфейс уже подготовлен к использованию ключей."
     )
+    import_log = st.session_state.get("sbis_import_log") or []
+    if import_log:
+        st.subheader("Лог импорта")
+        st.caption("Последние события импорта")
+        for entry in import_log[-20:]:
+            st.write(f"• {entry}")
+        if st.button("Очистить лог", key="sbis_clear_log"):
+            st.session_state["sbis_import_log"] = []
 
 
 with st.expander("Import from Excel/CSV", expanded=False):
@@ -260,9 +398,9 @@ with st.expander("Import from Excel/CSV", expanded=False):
     if sample_files:
         st.markdown("**Примеры из репозитория**")
         selected_sample = st.selectbox(
-            "Выберите пример", options=["— не выбран —"] + [str(p.relative_to(Path("/home/engine/project"))) for p in sample_files], key="sbis_sample_select"
+            "Выберите пример", options=[SAMPLE_NOT_SELECTED] + [str(p.relative_to(Path("/home/engine/project"))) for p in sample_files], key="sbis_sample_select"
         )
-        if selected_sample != "— не выбран —":
+        if selected_sample != SAMPLE_NOT_SELECTED:
             if st.button("Загрузить пример из репозитория", key="sbis_load_sample"):
                 path = Path("/home/engine/project") / selected_sample
                 try:
@@ -298,6 +436,22 @@ with st.expander("Import from Excel/CSV", expanded=False):
         current_df = sample_df
         current_source_name = sample_source_name
 
+    feedback = st.session_state.get("sbis_import_feedback")
+    if isinstance(feedback, dict):
+        status = feedback.get("status")
+        message = feedback.get("message")
+        details = feedback.get("details")
+        if status == "success" and message:
+            st.success(message)
+        elif status == "info" and message:
+            st.info(message)
+        elif status == "error" and message:
+            st.error(message)
+        elif message:
+            st.write(message)
+        if details:
+            st.caption(details)
+
     if current_df is not None and not current_df.empty:
         st.caption(f"Выбранный файл: {current_source_name}")
         st.dataframe(current_df.head(30), use_container_width=True)
@@ -329,16 +483,6 @@ with st.expander("Import from Excel/CSV", expanded=False):
                 "Тип внешнего ключа (external_key_type)", value=default_key_type, key="sbis_external_key_type"
             ).strip() or default_key_type
 
-            field_labels = {
-                "title": "Название (title)",
-                "brand": "Бренд (brand)",
-                "price": "Цена (price)",
-                "stock": "Остаток (stock)",
-                "product_id": "Product ID",
-                "offer_id": "Offer ID",
-                "sku": "SKU",
-                "nm_id": "NM ID",
-            }
             guess_map = {
                 "title": _guess_column(columns, ["title", "name", "название", "наименование"]),
                 "brand": _guess_column(columns, ["brand", "бренд"]),
@@ -350,14 +494,14 @@ with st.expander("Import from Excel/CSV", expanded=False):
                 "nm_id": _guess_column(columns, ["nm_id", "nm id", "nmid"]),
             }
 
-            sentinel = "— не использовать —"
             mapping: Dict[str, Optional[str]] = {}
-            for field, label in field_labels.items():
-                options = [sentinel] + columns
+            for field in FIELD_ORDER:
+                label = FIELD_LABELS[field]
+                options = [FIELD_NOT_USED_OPTION] + columns
                 default_value = guess_map.get(field)
                 default_index = options.index(default_value) if default_value in columns else 0
                 selected = st.selectbox(label, options=options, index=default_index, key=f"sbis_map_{field}")
-                mapping[field] = None if selected == sentinel else selected
+                mapping[field] = None if selected == FIELD_NOT_USED_OPTION else selected
 
             default_image_columns = [col for col in columns if col.lower() in {"image", "image_url", "image_urls", "photo"}]
             image_columns = st.multiselect(
@@ -372,40 +516,40 @@ with st.expander("Import from Excel/CSV", expanded=False):
                 )
                 st.dataframe(duplicate_rows[[key_column]].head(100), use_container_width=True)
 
-            field_mapping = {k: v for k, v in mapping.items() if v}
-            records, errors, duplicates = _prepare_records(
-                current_df,
-                key_column=key_column,
-                external_key_type=key_type,
-                field_mapping=mapping,
-                image_columns=image_columns,
-            )
+            missing_mapping_fields = [
+                FIELD_LABELS[field]
+                for field in MANDATORY_MAPPING_FIELDS
+                if not mapping.get(field)
+            ]
+
+            records: List[Dict[str, Any]] = []
+            errors: List[str] = []
+            duplicate_keys: List[str] = []
+            if missing_mapping_fields:
+                st.error(
+                    "Укажите столбцы для обязательных полей: "
+                    + ", ".join(missing_mapping_fields)
+                )
+            else:
+                records, errors, duplicate_keys = _prepare_records(
+                    current_df,
+                    key_column=key_column,
+                    external_key_type=key_type,
+                    field_mapping=mapping,
+                    image_columns=image_columns,
+                )
 
             st.caption(f"Подготовлено записей: {len(records)}")
 
-            if st.session_state.get("sbis_import_feedback"):
-                feedback = st.session_state["sbis_import_feedback"]
-                status = feedback.get("status") if isinstance(feedback, dict) else None
-                message = feedback.get("message") if isinstance(feedback, dict) else None
-                details = feedback.get("details") if isinstance(feedback, dict) else None
-                if status == "success":
-                    st.success(message)
-                elif status == "info":
-                    st.info(message)
-                elif status == "error":
-                    st.error(message)
-                if details:
-                    st.caption(details)
-
             if errors:
-                st.error("Проблемы с данными:")
+                st.error("Обнаружены проблемы с данными. Проверьте строки ниже.")
                 for err in errors[:20]:
                     st.write(f"- {err}")
                 if len(errors) > 20:
-                    st.write(f"… и ещё {len(errors) - 20} записей")
-            if duplicates:
+                    st.write(f"… и ещё {len(errors) - 20} строк")
+            if duplicate_keys:
                 st.warning(
-                    f"Обнаружено повторяющихся ключей: {len(duplicates)}. Будут использованы первые вхождения."
+                    f"Обнаружено повторяющихся ключей: {len(duplicate_keys)}. Будут использованы первые вхождения."
                 )
 
             preview_count = min(20, len(records))
@@ -415,6 +559,8 @@ with st.expander("Import from Excel/CSV", expanded=False):
                     st.dataframe(pd.DataFrame(records).head(preview_count), use_container_width=True)
                 except Exception:  # noqa: BLE001
                     st.write(records[:preview_count])
+            elif not missing_mapping_fields and not errors and not duplicate_keys:
+                st.info("После настройки маппинга данные будут показаны здесь для проверки.")
 
             col_validate, col_import = st.columns(2)
             with col_validate:
@@ -423,36 +569,85 @@ with st.expander("Import from Excel/CSV", expanded=False):
                 do_import = st.button("Импортировать", type="primary", use_container_width=True)
 
             if do_dry_run or do_import:
-                if not records:
+                should_rerun = False
+                if missing_mapping_fields:
+                    message_text = (
+                        "Укажите столбцы для обязательных полей: "
+                        + ", ".join(missing_mapping_fields)
+                    )
+                    st.session_state["sbis_import_feedback"] = {
+                        "status": "error",
+                        "message": message_text,
+                    }
+                    _append_import_log(f"Импорт остановлен: не заполнены поля ({', '.join(missing_mapping_fields)})")
+                elif not records:
                     st.session_state["sbis_import_feedback"] = {
                         "status": "error",
                         "message": "Нет данных для импорта после обработки. Проверьте настройки маппинга.",
                     }
+                    _append_import_log("Импорт остановлен: подготовленные данные отсутствуют")
                 else:
                     try:
-                        to_process = records
-                        inserted, updated = _simulate_upsert(to_process) if do_dry_run else upsert_products(to_process)
-                        message_type = "info" if do_dry_run else "success"
-                        action_word = "(dry-run)" if do_dry_run else "Импорт завершён"
-                        message = f"{action_word}: добавлено {inserted}, обновлено {updated}."
+                        inserted, updated = (
+                            _simulate_upsert(records) if do_dry_run else upsert_products(records)
+                        )
+                        details_lines = [f"Всего подготовлено записей: {len(records)}"]
+                        if errors:
+                            details_lines.append(f"Предупреждений: {len(errors)}")
+                        if duplicate_keys:
+                            details_lines.append(f"Повторы ключей: {len(duplicate_keys)}")
+                        details_text = " | ".join(details_lines)
+                        if do_dry_run:
+                            message_type = "info"
+                            message = f"Dry-run: добавлено {inserted}, обновлено {updated}."
+                        else:
+                            message_type = "success"
+                            message = f"Импорт завершён: добавлено {inserted}, обновлено {updated}."
                         st.session_state["sbis_import_feedback"] = {
                             "status": message_type,
                             "message": message,
-                            "details": f"Всего подготовлено записей: {len(records)}",
+                            "details": details_text,
                         }
+                        log_message = (
+                            f"{'Dry-run' if do_dry_run else 'Импорт'}: подготовлено {len(records)}, добавлено {inserted}, обновлено {updated}"
+                        )
+                        if errors:
+                            log_message += f", предупреждений: {len(errors)}"
+                        if duplicate_keys:
+                            log_message += f", повторов: {len(duplicate_keys)}"
+                        _append_import_log(log_message)
+                        if errors:
+                            for err in errors[:3]:
+                                _append_import_log(f"⚠️ {err}")
+                            if len(errors) > 3:
+                                _append_import_log(f"… и ещё {len(errors) - 3} предупреждений")
+                        if duplicate_keys:
+                            preview_duplicates = ", ".join(duplicate_keys[:5])
+                            suffix = "…" if len(duplicate_keys) > 5 else ""
+                            _append_import_log(
+                                f"Повторяющиеся ключи: {preview_duplicates}{suffix}"
+                            )
                         if do_import:
+                            _reset_import_state()
                             load_sbis_products_df.clear()
+                            should_rerun = True
                     except Exception as exc:  # noqa: BLE001
+                        error_message = f"Не удалось обработать данные: {exc}"
                         st.session_state["sbis_import_feedback"] = {
                             "status": "error",
-                            "message": f"Не удалось обработать данные: {exc}",
+                            "message": error_message,
                         }
-                st.experimental_rerun()
+                        _append_import_log(
+                            f"Ошибка {'dry-run' if do_dry_run else 'импорта'}: {exc}"
+                        )
+                if should_rerun:
+                    st.rerun()
 
     elif current_df is not None and current_df.empty:
         st.warning("Файл не содержит данных для импорта.")
     else:
-        st.info("Загрузите файл для начала импорта данных SBIS.")
+        if not feedback:
+            st.info("Загрузите файл для начала импорта данных SBIS.")
 
 
 col_refresh, _, _ = st.columns([1, 1, 3])
